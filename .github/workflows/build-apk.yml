@@ -1,0 +1,86 @@
+name: Build Carline Debug APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Capacitor 6 dependencies
+        run: |
+          npm install
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/preferences@6 @capacitor/haptics@6
+
+      - name: Initialize Android project if missing
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap init Carline cz.carline.track --web-dir www
+            npx cap add android
+          fi
+
+      - name: Restore Persistent Android Signing Keystore
+        run: |
+          if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "CHYBA: Secret KEYSTORE_BASE64 je prazdny!"
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/keystore"
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '\n\r ' | base64 --decode > "$GITHUB_WORKSPACE/keystore/ondrandy.keystore"
+          keytool -list -keystore "$GITHUB_WORKSPACE/keystore/ondrandy.keystore" -storepass android
+
+      - name: Configure Explicit Signing and versionCode in build.gradle
+        run: |
+          BUILD_GRADLE="android/app/build.gradle"
+          sed -i "s/versionCode [0-9]\+/versionCode ${{ github.run_number }}/g" "$BUILD_GRADLE"
+          sed -i "s/versionName \"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/g" "$BUILD_GRADLE"
+          cat << 'EOF' >> "$BUILD_GRADLE"
+
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile file("${System.getenv('GITHUB_WORKSPACE')}/keystore/ondrandy.keystore")
+                      storePassword "android"
+                      keyAlias "androiddebugkey"
+                      keyPassword "android"
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.debug
+                  }
+              }
+          }
+          EOF
+          npx cap sync android
+
+      - name: Assemble Debug APK
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: carline-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
