@@ -2,7 +2,7 @@
   "use strict";
 
   const Carline = (global.Carline = global.Carline || {});
-  const { drawing, physics } = Carline.CONFIG;
+  const { drawing, physics, carSpecs } = Carline.CONFIG;
 
   function dist(a, b) {
     return Math.hypot(b.x - a.x, b.y - a.y);
@@ -59,15 +59,14 @@
 
     const spanX = Math.max(1, maxX - minX);
     const spanY = Math.max(1, maxY - minY);
-    const topReserve = padding + 22;
     const availW = Math.max(40, width - padding * 2);
-    const availH = Math.max(40, height - topReserve - padding);
+    const availH = Math.max(40, height - padding * 2);
     const scale = Math.min(availW / spanX, availH / spanY);
 
     const scaledW = spanX * scale;
     const scaledH = spanY * scale;
     const offsetX = (width - scaledW) * 0.5 - minX * scale;
-    const offsetY = topReserve + (availH - scaledH) * 0.5 - minY * scale;
+    const offsetY = (height - scaledH) * 0.5 - minY * scale;
 
     return ring.map((p) => ({
       x: p.x * scale + offsetX,
@@ -111,6 +110,7 @@
         y: a.y + (b.y - a.y) * t,
         tx: 1,
         ty: 0,
+        signedCurvature: 0,
         curvature: 0,
         maxSafeSpeed: physics.maxSpeed,
         dangerRatio: 0
@@ -119,6 +119,7 @@
 
     const m = samples.length;
     const rawCurvs = new Array(m).fill(0);
+    const signedCurvs = new Array(m).fill(0);
 
     for (let i = 0; i < m; i++) {
       const prev = samples[(i - 3 + m) % m];
@@ -137,9 +138,10 @@
       const v2y = next.y - curr.y;
       const l1 = Math.hypot(v1x, v1y) || 1;
       const l2 = Math.hypot(v2x, v2y) || 1;
-      const cross = Math.abs(v1x * v2y - v1y * v2x) / (l1 * l2);
+      const crossSigned = (v1x * v2y - v1y * v2x) / (l1 * l2);
       const chord = Math.max(10, (l1 + l2) * 0.5);
-      rawCurvs[i] = Math.min(0.032, cross / chord);
+      signedCurvs[i] = Math.max(-0.032, Math.min(0.032, crossSigned / chord));
+      rawCurvs[i] = Math.abs(signedCurvs[i]);
     }
 
     const grip = magnetGrip || physics.magnetGripBase;
@@ -149,6 +151,7 @@
       const cNext = rawCurvs[(i + 1) % m];
       const smoothCurv = 0.25 * cPrev + 0.5 * cCurr + 0.25 * cNext;
       samples[i].curvature = smoothCurv;
+      samples[i].signedCurvature = signedCurvs[i];
 
       const safeFromMagnet = smoothCurv > 0.00035
         ? Math.sqrt(grip / smoothCurv)
@@ -216,7 +219,40 @@
     return crossings;
   }
 
+  function getSpec(carStyleId) {
+    return carSpecs[carStyleId] || carSpecs.classic_car;
+  }
+
   Carline.Engine = {
+    generateRandomStroke(width, height) {
+      const cx = width * 0.5;
+      const cy = height * 0.5;
+      const rx = Math.max(80, width * 0.36);
+      const ry = Math.max(110, height * 0.38);
+      const pts = [];
+      const steps = 48;
+      const variant = Math.floor(Math.random() * 3);
+      const phaseOffset = Math.random() * Math.PI * 2;
+
+      for (let i = 0; i < steps; i++) {
+        const t = (i / steps) * Math.PI * 2;
+        let x = cx;
+        let y = cy;
+        if (variant === 0) {
+          x = cx + rx * Math.sin(t + phaseOffset) * 0.92;
+          y = cy + ry * Math.sin(2 * t + phaseOffset) * 0.92;
+        } else if (variant === 1) {
+          x = cx + rx * (0.68 * Math.cos(t) + 0.32 * Math.cos(3 * t + phaseOffset));
+          y = cy + ry * (0.72 * Math.sin(t) + 0.28 * Math.sin(2 * t + phaseOffset));
+        } else {
+          x = cx + rx * Math.sin(2 * t + phaseOffset) * 0.9;
+          y = cy + ry * Math.sin(3 * t + phaseOffset) * 0.9;
+        }
+        pts.push({ x, y, t: i * 16 });
+      }
+      return pts;
+    },
+
     validateStroke(rawPoints) {
       if (!Array.isArray(rawPoints) || rawPoints.length < 6) {
         return { valid: false, reason: "too_short" };
@@ -240,13 +276,32 @@
       const resampled = resampleClosedLoop(fitted, drawing.sampleCount, grip);
       const crossings = detectCrossings(resampled.samples);
 
-      return {
+      const track = {
         loopPoints: fitted,
         samples: resampled.samples,
         totalLength: resampled.totalLength,
         crossings,
-        magnetGrip: grip
+        magnetGrip: grip,
+        autoSingleLapSec: 5
       };
+
+      track.autoSingleLapSec = Carline.Engine.simulateAutoLapTime(track);
+      return track;
+    },
+
+    simulateAutoLapTime(track) {
+      if (!track || !track.samples || track.samples.length === 0) return 5.0;
+      const simCar = Carline.Engine.createCarState();
+      simCar.speed = 90;
+      const dt = 0.025;
+      let elapsed = 0;
+      const maxTime = 60;
+
+      while (simCar.lapsCompleted < 1 && elapsed < maxTime) {
+        Carline.Engine.stepCar(simCar, track, "auto", dt, "classic_car", null);
+        elapsed += dt;
+      }
+      return Math.max(1.5, elapsed);
     },
 
     sampleAtDistance(track, distanceS) {
@@ -256,6 +311,7 @@
           y: 0,
           tx: 1,
           ty: 0,
+          signedCurvature: 0,
           curvature: 0,
           maxSafeSpeed: physics.maxSpeed,
           dangerRatio: 0,
@@ -278,6 +334,7 @@
         y: s0.y + (s1.y - s0.y) * frac,
         tx: s0.tx + (s1.tx - s0.tx) * frac,
         ty: s0.ty + (s1.ty - s0.ty) * frac,
+        signedCurvature: s0.signedCurvature + (s1.signedCurvature - s0.signedCurvature) * frac,
         curvature: s0.curvature + (s1.curvature - s0.curvature) * frac,
         maxSafeSpeed: s0.maxSafeSpeed + (s1.maxSafeSpeed - s0.maxSafeSpeed) * frac,
         dangerRatio: s0.dangerRatio + (s1.dangerRatio - s0.dangerRatio) * frac,
@@ -322,6 +379,7 @@
         lapsCompleted: 0,
         offTrackCount: 0,
         gripLoadRatio: 0,
+        driftAngle: 0,
         x: 0,
         y: 0,
         angle: 0,
@@ -330,12 +388,13 @@
       };
     },
 
-    stepCar(car, track, mode, dt, callbacks) {
+    stepCar(car, track, mode, dt, carStyleId, callbacks) {
       if (!track || !track.samples || track.samples.length === 0 || dt <= 0) {
         return { event: null };
       }
 
       const clampedDt = Math.min(dt, 0.05);
+      const spec = getSpec(carStyleId);
       const pt = Carline.Engine.sampleAtDistance(track, car.s);
 
       if (car.phase === "flying") {
@@ -345,6 +404,7 @@
         car.x = car.flightStartX + car.flightDirX * (progress * 54);
         car.y = car.flightStartY + car.flightDirY * (progress * 54) - arcBoost;
         car.scale = 1 + Math.sin(progress * Math.PI) * 0.42;
+        car.driftAngle += clampedDt * 9;
         car.visible = true;
         car.gripLoadRatio = 1.2;
 
@@ -359,6 +419,7 @@
       if (car.phase === "dropped") {
         car.phaseTimer += clampedDt;
         car.visible = false;
+        car.driftAngle = 0;
         if (car.phaseTimer >= physics.dropPauseSec) {
           car.phase = "blinking";
           car.phaseTimer = 0;
@@ -382,6 +443,7 @@
         car.y = car.returnY;
         car.scale = 1;
         car.gripLoadRatio = 0;
+        car.driftAngle = 0;
         const cyclePhase = (car.phaseTimer / physics.blinkDurationSec) * physics.blinkCycles * 2;
         car.visible = Math.floor(cyclePhase) % 2 === 0;
 
@@ -403,14 +465,23 @@
         const rate = diff < 0 ? 9.5 : 4.5;
         car.speed += diff * Math.min(1, clampedDt * rate);
       } else {
-        const clampedTarget = Math.max(physics.minSpeed, Math.min(physics.maxSpeed, car.targetSpeed));
+        const effectiveMax = physics.maxSpeed * spec.maxSpeedMult;
+        const clampedTarget = Math.max(physics.minSpeed, Math.min(effectiveMax, car.targetSpeed));
         car.targetSpeed = clampedTarget;
         const diff = car.targetSpeed - car.speed;
-        car.speed += diff * Math.min(1, clampedDt * 7.5);
+        car.speed += diff * Math.min(1, clampedDt * 7.5 * spec.accelMult);
       }
 
-      const safeLimit = pt.maxSafeSpeed;
-      car.gripLoadRatio = safeLimit > 0 ? car.speed / safeLimit : 0;
+      const effectiveSafeLimit = pt.maxSafeSpeed * Math.sqrt(spec.gripMult);
+      car.gripLoadRatio = effectiveSafeLimit > 0 ? car.speed / effectiveSafeLimit : 0;
+
+      if (mode === "manual" && car.gripLoadRatio > 0.78 && pt.curvature > 0.001) {
+        const slipIntensity = Math.min(1, (car.gripLoadRatio - 0.78) / 0.22);
+        const turnSign = pt.signedCurvature >= 0 ? 1 : -1;
+        car.driftAngle = turnSign * slipIntensity * 0.36;
+      } else {
+        car.driftAngle *= Math.max(0, 1 - clampedDt * 12);
+      }
 
       if (mode === "manual" && car.gripLoadRatio > 1.0 && car.speed > 85) {
         car.offTrackCount += 1;
