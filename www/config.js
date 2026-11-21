@@ -32,22 +32,22 @@
     drawing: {
       minPointDistance: 7,
       minTrackLength: 150,
-      smoothingIterations: 3,
+      smoothingIterations: 2,
       canvasPadding: 34,
       sampleCount: 420
     },
     physics: {
-      magnetGripBase: 4.6,
+      magnetGripBase: 480,
       magnetGripDifficulties: {
-        easy: 5.8,
-        normal: 4.6,
-        hard: 3.6
+        easy: 760,
+        normal: 480,
+        hard: 300
       },
-      autoCruiseMax: 220,
+      autoCruiseMax: 245,
       autoMinCornerSpeed: 72,
-      autoLookaheadRatio: 0.16,
-      autoSafetyFactor: 0.72,
-      manualStartSpeed: 90,
+      autoLookaheadRatio: 0.18,
+      autoSafetyFactor: 0.78,
+      manualStartSpeed: 95,
       maxSpeed: 360,
       minSpeed: 0,
       manualDragSensitivity: 1.25,
@@ -55,7 +55,7 @@
       dropPauseSec: 0.14,
       blinkDurationSec: 1.2,
       blinkCycles: 5,
-      postCrashSpeedFactor: 0.5
+      postCrashSpeedFactor: 0.55
     },
     audio: {
       engineBaseFreq: 54,
