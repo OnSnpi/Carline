@@ -9,10 +9,13 @@
     profile: JSON.parse(JSON.stringify(CONFIG.defaults.profile)),
     settings: JSON.parse(JSON.stringify(CONFIG.defaults.settings)),
     phase: "drawing",
-    mode: "auto",
     rawPoints: [],
     track: null,
     car: Engine.createCarState(),
+    ghostCar: Engine.createCarState(),
+    raceElapsedSec: 0,
+    targetSeriesSec: 0,
+    sparks: [],
     hasMoves: false,
     showBrakingZones: false,
     drawingPointerId: null,
@@ -42,8 +45,7 @@
     dom.statusBar = document.getElementById("statusBar");
     dom.statusText = document.getElementById("statusText");
     dom.statusSubText = document.getElementById("statusSubText");
-    dom.btnModeAuto = document.getElementById("btnModeAuto");
-    dom.btnModeManual = document.getElementById("btnModeManual");
+    dom.statusActionSlot = document.getElementById("statusActionSlot");
     dom.boardCard = document.getElementById("boardCard");
     dom.canvas = document.getElementById("trackCanvas");
     dom.ctx = dom.canvas.getContext("2d");
@@ -113,11 +115,12 @@
   async function persistSession() {
     await saveStorage(CONFIG.storageKeys.session, {
       phase: state.phase,
-      mode: state.mode,
       rawPoints: state.rawPoints,
       hasMoves: state.hasMoves,
       showBrakingZones: state.showBrakingZones,
-      car: state.car
+      raceElapsedSec: state.raceElapsedSec,
+      car: state.car,
+      ghostCar: state.ghostCar
     });
   }
 
@@ -214,6 +217,15 @@
     }
   }
 
+  function formatSec(sec) {
+    return `${sec.toFixed(1)}s`;
+  }
+
+  function computeTargetSeriesTime() {
+    if (!state.track) return 0;
+    return state.track.autoSingleLapSec * state.settings.lapsToWin;
+  }
+
   function applyTheme() {
     const allowedThemes = state.profile.unlockedThemes;
     const chosenTheme = allowedThemes.includes(state.profile.selectedTheme)
@@ -270,33 +282,64 @@
     }
   }
 
+  function renderStatusActionSlot() {
+    if (state.phase === "drawing") {
+      dom.statusActionSlot.innerHTML = `<button id="btnRandomTrack" class="action-pill-btn" type="button">${getText(state.lang, "btnRandomTrack")}</button>`;
+      document.getElementById("btnRandomTrack").addEventListener("click", () => {
+        if (performance.now() < state.suppressClickUntil) return;
+        ensureAudioContext();
+        const rect = dom.boardCard.getBoundingClientRect();
+        state.rawPoints = Engine.generateRandomStroke(rect.width, rect.height);
+        finalizeTrackFromStroke();
+      });
+    } else if (state.phase === "demo") {
+      dom.statusActionSlot.innerHTML = `<button id="btnStartRace" class="action-pill-btn start-race" type="button">${getText(state.lang, "btnStartRace")}</button>`;
+      document.getElementById("btnStartRace").addEventListener("click", () => {
+        if (performance.now() < state.suppressClickUntil) return;
+        ensureAudioContext();
+        startManualRace();
+      });
+    } else {
+      dom.statusActionSlot.innerHTML = `<span class="race-timer-badge" id="raceTimerBadge">${formatSec(state.raceElapsedSec)}</span>`;
+    }
+  }
+
   function renderStatus() {
     dom.statusBar.classList.remove("trial", "error", "success");
     if (state.statusTone === "trial") dom.statusBar.classList.add("trial");
     if (state.statusTone === "error") dom.statusBar.classList.add("error");
     if (state.statusTone === "success") dom.statusBar.classList.add("success");
 
+    const targetSec = computeTargetSeriesTime();
+
     if (state.statusMessageKey) {
       dom.statusText.textContent = getText(state.lang, state.statusMessageKey);
     } else if (state.phase === "drawing") {
       dom.statusText.textContent = getText(state.lang, "statusDraw");
-    } else if (state.mode === "auto") {
-      dom.statusText.textContent = getText(state.lang, "statusAutoDemo");
+    } else if (state.phase === "demo") {
+      dom.statusText.textContent = `${getText(state.lang, "statusDemoReady")} ${formatSec(targetSec)}`;
     } else {
-      dom.statusText.textContent = getText(state.lang, "statusManualDrive");
+      dom.statusText.textContent = `${getText(state.lang, "statusRacing")} ${formatSec(targetSec)}`;
     }
 
     if (state.phase === "drawing") {
       dom.statusSubText.textContent = getText(state.lang, "statusDrawSub");
+    } else if (state.phase === "demo") {
+      dom.statusSubText.textContent = getText(state.lang, "statusDemoSub");
     } else {
       const spd = Math.round(state.car.speed);
       let gripStr = getText(state.lang, "gripOk");
       if (state.car.phase === "flying" || state.car.phase === "dropped") {
         gripStr = getText(state.lang, "gripOut");
-      } else if (state.mode === "manual" && state.car.gripLoadRatio > 0.82) {
+      } else if (state.car.gripLoadRatio > 0.78) {
         gripStr = getText(state.lang, "gripWarn");
       }
       dom.statusSubText.textContent = `${getText(state.lang, "speedLabel")}: ${spd} • ${gripStr} • ${getText(state.lang, "exitsShort")}: ${state.car.offTrackCount}`;
+    }
+
+    const timerEl = document.getElementById("raceTimerBadge");
+    if (timerEl) {
+      timerEl.textContent = formatSec(state.raceElapsedSec);
     }
   }
 
@@ -307,19 +350,18 @@
       const key = el.getAttribute("data-i18n");
       el.textContent = getText(state.lang, key);
     }
+    renderStatusActionSlot();
     renderStatus();
   }
 
   function updateHud() {
     dom.hudWins.textContent = String(state.profile.wins);
-    dom.hudLaps.textContent = String(state.car.lapsCompleted);
+    dom.hudLaps.textContent = state.phase === "racing" ? String(state.car.lapsCompleted) : "0";
     dom.hudTargetLaps.textContent = String(state.settings.lapsToWin);
 
-    dom.btnModeAuto.classList.toggle("active", state.mode === "auto");
-    dom.btnModeManual.classList.toggle("active", state.mode === "manual");
     dom.btnHint.classList.toggle("active-hint", state.showBrakingZones);
-    dom.btnUndo.disabled = state.phase !== "driving";
-    dom.btnHint.disabled = state.phase !== "driving";
+    dom.btnUndo.disabled = state.phase !== "racing";
+    dom.btnHint.disabled = state.phase === "drawing";
 
     renderStatus();
   }
@@ -333,10 +375,14 @@
     dom.canvas.height = Math.floor(height * dpr);
     dom.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    if (state.phase === "driving" && Array.isArray(state.rawPoints) && state.rawPoints.length >= 6) {
+    if ((state.phase === "demo" || state.phase === "racing") && Array.isArray(state.rawPoints) && state.rawPoints.length >= 6) {
       const prevRatio =
         state.track && state.track.totalLength > 0
           ? state.car.s / state.track.totalLength
+          : 0;
+      const prevGhostRatio =
+        state.track && state.track.totalLength > 0
+          ? state.ghostCar.s / state.track.totalLength
           : 0;
       state.track = Engine.buildTrack(state.rawPoints, width, height, state.settings.difficulty);
       state.car.s = prevRatio * state.track.totalLength;
@@ -344,6 +390,12 @@
       state.car.x = pt.x;
       state.car.y = pt.y;
       state.car.angle = Math.atan2(pt.ty, pt.tx);
+
+      state.ghostCar.s = prevGhostRatio * state.track.totalLength;
+      const gpt = Engine.sampleAtDistance(state.track, state.ghostCar.s);
+      state.ghostCar.x = gpt.x;
+      state.ghostCar.y = gpt.y;
+      state.ghostCar.angle = Math.atan2(gpt.ty, gpt.tx);
     }
   }
 
@@ -355,9 +407,48 @@
       trackUnder: cs.getPropertyValue("--track-under").trim(),
       trackOver: cs.getPropertyValue("--track-over").trim(),
       carColor: cs.getPropertyValue("--car-color").trim(),
-      startColor: cs.getPropertyValue("--start-color").trim(),
-      accent: cs.getPropertyValue("--accent").trim()
+      ghostColor: cs.getPropertyValue("--ghost-color").trim(),
+      startColor: cs.getPropertyValue("--start-color").trim()
     };
+  }
+
+  function spawnDriftSparks(car) {
+    if (!car || car.phase !== "driving" || car.gripLoadRatio < 0.8) return;
+    if (Math.random() > 0.55) return;
+    const backX = car.x - Math.cos(car.angle) * 10;
+    const backY = car.y - Math.sin(car.angle) * 10;
+    const spread = (Math.random() - 0.5) * 1.4;
+    const sparkAngle = car.angle + Math.PI + spread;
+    const spd = 35 + Math.random() * 55;
+    state.sparks.push({
+      x: backX,
+      y: backY,
+      vx: Math.cos(sparkAngle) * spd,
+      vy: Math.sin(sparkAngle) * spd,
+      life: 0.22 + Math.random() * 0.14,
+      maxLife: 0.36
+    });
+  }
+
+  function updateAndDrawSparks(ctx, dt) {
+    if (state.sparks.length === 0) return;
+    ctx.save();
+    for (let i = state.sparks.length - 1; i >= 0; i--) {
+      const sp = state.sparks[i];
+      sp.life -= dt;
+      if (sp.life <= 0) {
+        state.sparks.splice(i, 1);
+        continue;
+      }
+      sp.x += sp.vx * dt;
+      sp.y += sp.vy * dt;
+      const alpha = Math.max(0, sp.life / sp.maxLife);
+      ctx.fillStyle = `rgba(251, 191, 36, ${alpha.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(sp.x, sp.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   function drawTrack(ctx, styles) {
@@ -427,24 +518,24 @@
     ctx.restore();
   }
 
-  function drawCar(ctx, styles) {
-    const car = state.car;
-    if (!state.track || car.visible === false) return;
+  function drawCarEntity(ctx, carObj, fillColor, isGhost) {
+    if (!state.track || carObj.visible === false) return;
 
-    const x = typeof car.x === "number" ? car.x : state.track.samples[0].x;
-    const y = typeof car.y === "number" ? car.y : state.track.samples[0].y;
-    const angle = typeof car.angle === "number" ? car.angle : 0;
-    const scale = car.scale || 1;
-    const carStyle = state.profile.selectedCar;
+    const x = typeof carObj.x === "number" ? carObj.x : state.track.samples[0].x;
+    const y = typeof carObj.y === "number" ? carObj.y : state.track.samples[0].y;
+    const baseAngle = typeof carObj.angle === "number" ? carObj.angle : 0;
+    const drift = isGhost ? 0 : (carObj.driftAngle || 0);
+    const scale = carObj.scale || 1;
+    const carStyle = isGhost ? "classic_car" : state.profile.selectedCar;
 
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(scale, scale);
-    ctx.rotate(angle);
+    ctx.rotate(baseAngle + drift);
 
-    ctx.fillStyle = styles.carColor;
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = isGhost ? "rgba(255,255,255,0.65)" : "#ffffff";
+    ctx.lineWidth = isGhost ? 1.5 : 2;
 
     if (carStyle === "neon_dot") {
       ctx.beginPath();
@@ -476,8 +567,10 @@
       ctx.roundRect(-11, -7, 22, 14, 4);
       ctx.fill();
       ctx.stroke();
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(3.5, -3, 4.5, 6);
+      if (!isGhost) {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(3.5, -3, 4.5, 6);
+      }
     }
 
     ctx.restore();
@@ -506,7 +599,7 @@
     ctx.restore();
   }
 
-  function renderCanvas() {
+  function renderCanvas(dt) {
     const rect = dom.boardCard.getBoundingClientRect();
     const width = Math.max(1, rect.width);
     const height = Math.max(1, rect.height);
@@ -516,9 +609,14 @@
 
     if (state.phase === "drawing") {
       drawDrawingStroke(dom.ctx, styles);
-    } else if (state.phase === "driving") {
+    } else if (state.phase === "demo") {
       drawTrack(dom.ctx, styles);
-      drawCar(dom.ctx, styles);
+      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+    } else if (state.phase === "racing") {
+      drawTrack(dom.ctx, styles);
+      updateAndDrawSparks(dom.ctx, dt || 0.016);
+      drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
+      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
     }
   }
 
@@ -527,7 +625,7 @@
     if (!check.valid) {
       state.rawPoints = [];
       setStatus("statusTooShort", "error", 2200);
-      renderCanvas();
+      renderCanvas(0.016);
       return;
     }
 
@@ -538,44 +636,78 @@
     state.car.x = startPt.x;
     state.car.y = startPt.y;
     state.car.angle = Math.atan2(startPt.ty, startPt.tx);
-    state.car.targetSpeed =
-      state.mode === "auto"
-        ? CONFIG.physics.autoCruiseMax
-        : CONFIG.physics.manualStartSpeed;
+    state.car.targetSpeed = CONFIG.physics.autoCruiseMax;
 
-    state.phase = "driving";
-    state.hasMoves = true;
+    state.phase = "demo";
+    state.hasMoves = false;
+    state.sparks = [];
     state.profile.tracksBuilt += 1;
+
+    renderStatusActionSlot();
     setStatus(null, "default", 0);
     updateHud();
-    renderCanvas();
+    renderCanvas(0.016);
     persistProfile();
     persistSession();
   }
 
+  function startManualRace() {
+    if (!state.track) return;
+    state.phase = "racing";
+    state.hasMoves = true;
+    state.raceElapsedSec = 0;
+    state.targetSeriesSec = computeTargetSeriesTime();
+    state.sparks = [];
+
+    const startPt = Engine.sampleAtDistance(state.track, 0);
+    const initialSpeed = state.settings.launchWithGas ? CONFIG.physics.manualStartSpeed : 0;
+
+    state.car = Engine.createCarState();
+    state.car.x = startPt.x;
+    state.car.y = startPt.y;
+    state.car.angle = Math.atan2(startPt.ty, startPt.tx);
+    state.car.speed = initialSpeed;
+    state.car.targetSpeed = initialSpeed;
+
+    state.ghostCar = Engine.createCarState();
+    state.ghostCar.x = startPt.x;
+    state.ghostCar.y = startPt.y;
+    state.ghostCar.angle = Math.atan2(startPt.ty, startPt.tx);
+    state.ghostCar.speed = 90;
+    state.ghostCar.targetSpeed = CONFIG.physics.autoCruiseMax;
+
+    triggerHaptic("light");
+    renderStatusActionSlot();
+    setStatus("statusRaceStarted", "success", 2000);
+    updateHud();
+    renderCanvas(0.016);
+    persistSession();
+  }
+
   function returnCarToStart() {
-    if (state.phase !== "driving" || !state.track) return;
+    if (state.phase !== "racing" || !state.track) return;
+    const startPt = Engine.sampleAtDistance(state.track, 0);
+    const initialSpeed = state.settings.launchWithGas ? CONFIG.physics.manualStartSpeed : 0;
+
     state.car.s = 0;
     state.car.lapProgress = 0;
-    state.car.speed = 0;
+    state.car.speed = initialSpeed;
+    state.car.targetSpeed = initialSpeed;
     state.car.phase = "driving";
     state.car.phaseTimer = 0;
     state.car.visible = true;
     state.car.scale = 1;
     state.car.gripLoadRatio = 0;
-    const startPt = Engine.sampleAtDistance(state.track, 0);
+    state.car.driftAngle = 0;
     state.car.x = startPt.x;
     state.car.y = startPt.y;
     state.car.angle = Math.atan2(startPt.ty, startPt.tx);
-    state.car.targetSpeed =
-      state.mode === "auto"
-        ? CONFIG.physics.autoCruiseMax
-        : CONFIG.physics.manualStartSpeed;
+    state.sparks = [];
 
     triggerHaptic("light");
     setStatus("statusResetStart", "trial", 1600);
     updateHud();
-    renderCanvas();
+    renderCanvas(0.016);
     persistSession();
   }
 
@@ -584,6 +716,9 @@
     state.rawPoints = [];
     state.track = null;
     state.car = Engine.createCarState();
+    state.ghostCar = Engine.createCarState();
+    state.raceElapsedSec = 0;
+    state.sparks = [];
     state.hasMoves = false;
     state.showBrakingZones = false;
     state.drawingPointerId = null;
@@ -591,36 +726,20 @@
     state.manualLastX = null;
     state.statusMessageKey = null;
     state.statusTone = "default";
-    updateHud();
-    renderCanvas();
-    persistSession();
-  }
 
-  function setMode(nextMode) {
-    if (nextMode !== "auto" && nextMode !== "manual") return;
-    state.mode = nextMode;
-    if (nextMode === "manual") {
-      state.car.targetSpeed = Math.max(CONFIG.physics.manualStartSpeed, state.car.speed);
-    } else {
-      state.car.targetSpeed = CONFIG.physics.autoCruiseMax;
-    }
-    setStatus(null, "default", 0);
+    renderStatusActionSlot();
     updateHud();
+    renderCanvas(0.016);
     persistSession();
   }
 
   function handleHintAction() {
-    if (state.phase !== "driving" || !state.track) return;
-    if (!state.showBrakingZones) {
-      state.showBrakingZones = true;
-      setStatus("statusHintShown", "trial", 2800);
-    } else {
-      setMode("auto");
-      setStatus("statusHintApplied", "success", 2600);
-    }
+    if (state.phase === "drawing" || !state.track) return;
+    state.showBrakingZones = !state.showBrakingZones;
+    setStatus(state.showBrakingZones ? "statusHintShown" : "statusHintHidden", "trial", 2200);
     triggerHaptic("light");
     updateHud();
-    renderCanvas();
+    renderCanvas(0.016);
     persistSession();
   }
 
@@ -661,19 +780,7 @@
   function bindEvents() {
     global.addEventListener("resize", () => {
       resizeCanvas();
-      renderCanvas();
-    });
-
-    dom.btnModeAuto.addEventListener("click", () => {
-      if (performance.now() < state.suppressClickUntil) return;
-      ensureAudioContext();
-      setMode("auto");
-    });
-
-    dom.btnModeManual.addEventListener("click", () => {
-      if (performance.now() < state.suppressClickUntil) return;
-      ensureAudioContext();
-      setMode("manual");
+      renderCanvas(0.016);
     });
 
     dom.btnUndo.addEventListener("click", () => {
@@ -693,7 +800,7 @@
 
     dom.btnNewGame.addEventListener("click", () => {
       if (performance.now() < state.suppressClickUntil) return;
-      if (state.hasMoves || (state.phase === "drawing" && state.rawPoints.length > 0)) {
+      if (state.phase === "racing" || (state.phase === "drawing" && state.rawPoints.length > 0)) {
         openConfirmNewModal();
       } else {
         resetToNewTrack();
@@ -749,11 +856,11 @@
         dom.canvas.setPointerCapture(ev.pointerId);
         const pt = getCanvasCoords(ev);
         state.rawPoints = [{ x: pt.x, y: pt.y, t: performance.now() }];
-        renderCanvas();
+        renderCanvas(0.016);
         return;
       }
 
-      if (state.phase === "driving" && state.mode === "manual") {
+      if (state.phase === "racing") {
         if (state.manualPointerId !== null) return;
         state.manualPointerId = ev.pointerId;
         state.manualLastX = ev.clientX;
@@ -767,12 +874,12 @@
         const last = state.rawPoints[state.rawPoints.length - 1];
         if (!last || Math.hypot(pt.x - last.x, pt.y - last.y) >= CONFIG.drawing.minPointDistance) {
           state.rawPoints.push({ x: pt.x, y: pt.y, t: performance.now() });
-          renderCanvas();
+          renderCanvas(0.016);
         }
         return;
       }
 
-      if (state.phase === "driving" && state.mode === "manual" && ev.pointerId === state.manualPointerId) {
+      if (state.phase === "racing" && ev.pointerId === state.manualPointerId) {
         if (state.manualLastX === null) {
           state.manualLastX = ev.clientX;
           return;
@@ -781,10 +888,12 @@
         state.manualLastX = ev.clientX;
         if (Math.abs(dx) > 0.5) {
           state.hasMoves = true;
+          const spec = CONFIG.carSpecs[state.profile.selectedCar] || CONFIG.carSpecs.classic_car;
+          const maxAllowed = CONFIG.physics.maxSpeed * spec.maxSpeedMult;
           const nextTarget = state.car.targetSpeed + dx * CONFIG.physics.manualDragSensitivity;
           state.car.targetSpeed = Math.max(
             CONFIG.physics.minSpeed,
-            Math.min(CONFIG.physics.maxSpeed, nextTarget)
+            Math.min(maxAllowed, nextTarget)
           );
           triggerHaptic("light");
         }
@@ -881,6 +990,7 @@
           ${selected ? '<span class="tile-check">✓</span>' : ""}
           <span class="tile-icon">${getCarPreviewSvg(c.id)}</span>
           <span class="tile-name">${getText(state.lang, c.nameKey)}</span>
+          <span class="tile-trait">${getText(state.lang, c.traitKey)}</span>
           <span class="tile-sub">${subLabel}</span>
         </button>
       `;
@@ -922,6 +1032,12 @@
         <button id="btnToggleHaptics" class="choice-btn ${state.settings.haptics ? "active" : ""}" type="button">
           📳 ${getText(state.lang, state.settings.haptics ? "vibOn" : "vibOff")}
         </button>
+      </div>
+
+      <div class="section-heading">${getText(state.lang, "launchHeading")}</div>
+      <div class="choice-grid-2">
+        <button class="choice-btn ${state.settings.launchWithGas ? "active" : ""}" data-launch="gas" type="button">🚀 ${getText(state.lang, "launchWithGas")}</button>
+        <button class="choice-btn ${!state.settings.launchWithGas ? "active" : ""}" data-launch="zero" type="button">🛑 ${getText(state.lang, "launchNoGas")}</button>
       </div>
 
       <div class="section-heading">${getText(state.lang, "magnetHeading")}</div>
@@ -1005,11 +1121,19 @@
       openSettingsModal();
     });
 
+    for (const btn of dom.modalCard.querySelectorAll("[data-launch]")) {
+      btn.addEventListener("click", () => {
+        state.settings.launchWithGas = btn.getAttribute("data-launch") === "gas";
+        persistProfile();
+        openSettingsModal();
+      });
+    }
+
     for (const btn of dom.modalCard.querySelectorAll("[data-diff]")) {
       btn.addEventListener("click", () => {
         state.settings.difficulty = btn.getAttribute("data-diff");
         resizeCanvas();
-        renderCanvas();
+        renderCanvas(0.016);
         persistProfile();
         openSettingsModal();
       });
@@ -1031,7 +1155,7 @@
         if (state.profile.unlockedThemes.includes(id)) {
           state.profile.selectedTheme = id;
           applyTheme();
-          renderCanvas();
+          renderCanvas(0.016);
           persistProfile();
           openSettingsModal();
         }
@@ -1044,7 +1168,7 @@
         const id = btn.getAttribute("data-car-id");
         if (state.profile.unlockedCars.includes(id)) {
           state.profile.selectedCar = id;
-          renderCanvas();
+          renderCanvas(0.016);
           persistProfile();
           openSettingsModal();
         }
@@ -1071,7 +1195,6 @@
           <li>${getText(state.lang, "guideCtrl2")}</li>
           <li>${getText(state.lang, "guideCtrl3")}</li>
           <li>${getText(state.lang, "guideCtrl4")}</li>
-          <li>${getText(state.lang, "guideCtrl5")}</li>
         </ul>
       </div>
 
@@ -1097,9 +1220,12 @@
   }
 
   function triggerWinFlow(isDebugTest) {
+    const targetSec = computeTargetSeriesTime();
+    const beatGhost = isDebugTest || (state.raceElapsedSec > 0 && state.raceElapsedSec <= targetSec);
     const cleanRun = isDebugTest || state.car.offTrackCount === 0;
+
     state.profile.wins += 1;
-    if (cleanRun) {
+    if (beatGhost || cleanRun) {
       state.profile.masterWins += 1;
     }
     const unlockedItems = refreshUnlocks();
@@ -1109,11 +1235,16 @@
     persistProfile();
 
     state.modalOpenedAt = performance.now();
-    const crossingsCount = state.track ? state.track.crossings.length : 0;
     const unlockBannerHtml =
       unlockedItems.length > 0
         ? `<div class="unlock-banner">${getText(state.lang, "winUnlockedPrefix")}${unlockedItems.join(", ")}</div>`
         : "";
+
+    const badgeKey = beatGhost
+      ? "winBadgeBeatGhost"
+      : cleanRun
+        ? "winBadgeClean"
+        : "winBadgeStandard";
 
     dom.modalCard.innerHTML = `
       <div class="win-badge-wrap">
@@ -1127,7 +1258,7 @@
             <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
           </svg>
         </div>
-        <span class="win-pill">${getText(state.lang, cleanRun ? "winBadgeClean" : "winBadgeStandard")}</span>
+        <span class="win-pill">${getText(state.lang, badgeKey)}</span>
       </div>
 
       <h2 class="modal-title">${getText(state.lang, "winTitle")}</h2>
@@ -1139,16 +1270,16 @@
 
       <div class="stats-grid-4">
         <div>
-          <div class="stat-cell-val">${state.car.lapsCompleted}</div>
-          <div class="stat-cell-lbl">${getText(state.lang, "winStatLaps")}</div>
+          <div class="stat-cell-val">${formatSec(state.raceElapsedSec)}</div>
+          <div class="stat-cell-lbl">${getText(state.lang, "winStatTime")}</div>
+        </div>
+        <div>
+          <div class="stat-cell-val">${formatSec(targetSec)}</div>
+          <div class="stat-cell-lbl">${getText(state.lang, "winStatTarget")}</div>
         </div>
         <div>
           <div class="stat-cell-val">${state.car.offTrackCount}</div>
           <div class="stat-cell-lbl">${getText(state.lang, "winStatExits")}</div>
-        </div>
-        <div>
-          <div class="stat-cell-val">${crossingsCount}</div>
-          <div class="stat-cell-lbl">${getText(state.lang, "winStatCrossings")}</div>
         </div>
         <div>
           <div class="stat-cell-val gold">${state.profile.wins}</div>
@@ -1167,8 +1298,13 @@
 
     document.getElementById("btnWinBoard").addEventListener("click", () => {
       if (performance.now() - state.modalOpenedAt < CONFIG.ui.modalGuardMs) return;
+      state.phase = "demo";
       state.car.lapsCompleted = 0;
       state.car.offTrackCount = 0;
+      state.car.phase = "driving";
+      state.car.visible = true;
+      state.car.driftAngle = 0;
+      renderStatusActionSlot();
       updateHud();
       closeModal();
     });
@@ -1184,41 +1320,56 @@
     if (!state.lastFrameTime) {
       state.lastFrameTime = now;
     }
-    const dt = (now - state.lastFrameTime) / 1000;
+    const dt = Math.min(0.05, (now - state.lastFrameTime) / 1000);
     state.lastFrameTime = now;
 
-    if (state.phase === "driving" && state.track && !dom.modalBackdrop.classList.contains("open")) {
-      const res = Engine.stepCar(state.car, state.track, state.mode, dt, {
-        onOffTrack: () => {
-          state.hasMoves = true;
-          state.profile.totalExits += 1;
-          playOffTrackSound();
-          triggerHaptic("heavy");
-          setStatus("statusOffTrack", "error", 1600);
-          updateHud();
-          persistProfile();
-        },
-        onLapCompleted: (laps) => {
-          state.hasMoves = true;
-          state.profile.totalLaps += 1;
-          if (laps >= state.settings.lapsToWin) {
-            triggerWinFlow(false);
-          } else {
-            playWinSound();
-            triggerHaptic("light");
-            setStatus("statusLapDone", "success", 1400);
+    if ((state.phase === "demo" || state.phase === "racing") && state.track && !dom.modalBackdrop.classList.contains("open")) {
+      if (state.phase === "demo") {
+        Engine.stepCar(state.car, state.track, "auto", dt, state.profile.selectedCar, null);
+        playEnginePulse(state.car.speed);
+        updateHud();
+        renderCanvas(dt);
+      } else if (state.phase === "racing") {
+        state.raceElapsedSec += dt;
+        Engine.stepCar(state.ghostCar, state.track, "auto", dt, "classic_car", null);
+
+        const res = Engine.stepCar(state.car, state.track, "manual", dt, state.profile.selectedCar, {
+          onOffTrack: () => {
+            state.hasMoves = true;
+            state.profile.totalExits += 1;
+            playOffTrackSound();
+            triggerHaptic("heavy");
+            setStatus("statusOffTrack", "error", 1600);
             updateHud();
             persistProfile();
+          },
+          onLapCompleted: (laps) => {
+            state.hasMoves = true;
+            state.profile.totalLaps += 1;
+            if (laps >= state.settings.lapsToWin) {
+              triggerWinFlow(false);
+            } else {
+              playWinSound();
+              triggerHaptic("light");
+              setStatus("statusLapDone", "success", 1400);
+              updateHud();
+              persistProfile();
+            }
           }
+        });
+
+        spawnDriftSparks(state.car);
+        if (state.car.phase === "driving" && state.car.gripLoadRatio > 0.86) {
+          triggerHaptic("light");
         }
-      });
 
-      if (res && res.event !== "off_track" && state.car.phase === "driving") {
-        playEnginePulse(state.car.speed);
+        if (res && res.event !== "off_track" && state.car.phase === "driving") {
+          playEnginePulse(state.car.speed);
+        }
+
+        updateHud();
+        renderCanvas(dt);
       }
-
-      updateHud();
-      renderCanvas();
     }
 
     global.requestAnimationFrame(gameLoop);
@@ -1251,15 +1402,20 @@
     resizeCanvas();
 
     const savedSession = await loadStorage(CONFIG.storageKeys.session);
-    if (savedSession && savedSession.phase === "driving" && Array.isArray(savedSession.rawPoints)) {
+    if (
+      savedSession &&
+      (savedSession.phase === "demo" || savedSession.phase === "racing") &&
+      Array.isArray(savedSession.rawPoints)
+    ) {
       const check = Engine.validateStroke(savedSession.rawPoints);
       if (check.valid) {
         const rect = dom.boardCard.getBoundingClientRect();
         state.rawPoints = savedSession.rawPoints;
         state.track = Engine.buildTrack(state.rawPoints, rect.width, rect.height, state.settings.difficulty);
-        state.mode = savedSession.mode === "manual" ? "manual" : "auto";
+        state.phase = savedSession.phase;
         state.hasMoves = Boolean(savedSession.hasMoves);
         state.showBrakingZones = Boolean(savedSession.showBrakingZones);
+        state.raceElapsedSec = Number(savedSession.raceElapsedSec) || 0;
         state.car = Object.assign(Engine.createCarState(), savedSession.car || {});
         state.car.phase = "driving";
         state.car.visible = true;
@@ -1267,13 +1423,20 @@
         state.car.x = pt.x;
         state.car.y = pt.y;
         state.car.angle = Math.atan2(pt.ty, pt.tx);
-        state.phase = "driving";
+
+        state.ghostCar = Object.assign(Engine.createCarState(), savedSession.ghostCar || {});
+        const gpt = Engine.sampleAtDistance(state.track, state.ghostCar.s);
+        state.ghostCar.x = gpt.x;
+        state.ghostCar.y = gpt.y;
+        state.ghostCar.angle = Math.atan2(gpt.ty, gpt.tx);
+
+        renderStatusActionSlot();
         renderStatus();
         updateHud();
       }
     }
 
-    renderCanvas();
+    renderCanvas(0.016);
     bindEvents();
     global.requestAnimationFrame(gameLoop);
   }
