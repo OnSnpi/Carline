@@ -52,13 +52,71 @@ jobs:
         run: |
           npm install
           npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/preferences@6 @capacitor/haptics@6
-
+          npm install -D @capacitor/assets
+          
       - name: Initialize Android project if missing
         run: |
           if [ ! -d "android" ]; then
             npx cap init Carline cz.carline.track --web-dir www
             npx cap add android
           fi
+
+      - name: Generate Carline App Icon
+        run: |
+          python3 -m pip install --quiet pillow
+          mkdir -p assets
+          python3 - << 'EOF'
+          import math
+          from PIL import Image, ImageDraw
+
+          SIZE = 1024
+          bg = Image.new("RGBA", (SIZE, SIZE), (15, 23, 42, 255))
+          fg = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+          draw = ImageDraw.Draw(fg)
+
+          pts = []
+          steps = 360
+          cx, cy = SIZE / 2, SIZE / 2
+          rx, ry = 310, 220
+          for i in range(steps + 1):
+              t = (i / steps) * 2 * math.pi
+              x = cx + rx * math.sin(t)
+              y = cy + ry * math.sin(2 * t) * 0.85
+              pts.append((x, y))
+
+          split = steps // 2
+          first_half = pts[:split + 1]
+          second_half = pts[split:]
+
+          draw.line(first_half, fill=(51, 65, 85, 255), width=92, joint="curve")
+          draw.line(first_half, fill=(100, 116, 139, 255), width=52, joint="curve")
+
+          draw.line(second_half, fill=(15, 23, 42, 255), width=108, joint="curve")
+          draw.line(second_half, fill=(30, 41, 59, 255), width=92, joint="curve")
+          draw.line(second_half, fill=(226, 232, 240, 255), width=52, joint="curve")
+
+          sx, sy = pts[0]
+          draw.ellipse((sx - 34, sy - 34, sx + 34, sy + 34), fill=(22, 163, 74, 255), outline=(255, 255, 255, 255), width=8)
+
+          car_idx = 235
+          px, py = pts[car_idx]
+          nx, ny = pts[car_idx + 2]
+          angle = math.atan2(ny - py, nx - px)
+
+          car_img = Image.new("RGBA", (140, 90), (0, 0, 0, 0))
+          cd = ImageDraw.Draw(car_img)
+          cd.rounded_rectangle((10, 10, 130, 80), radius=22, fill=(239, 68, 68, 255), outline=(255, 255, 255, 255), width=8)
+          cd.rectangle((86, 30, 112, 60), fill=(255, 255, 255, 255))
+
+          rotated_car = car_img.rotate(-math.degrees(angle), resample=Image.BICUBIC, expand=True)
+          fg.paste(rotated_car, (int(px - rotated_car.width / 2), int(py - rotated_car.height / 2)), rotated_car)
+
+          bg.save("assets/icon-background.png")
+          fg.save("assets/icon-foreground.png")
+          composite = Image.alpha_composite(bg, fg)
+          composite.save("assets/icon-only.png")
+          EOF
+          npx capacitor-assets generate --android
 
       - name: Restore Persistent Android Signing Keystore
         run: |
@@ -99,9 +157,10 @@ jobs:
         run: |
           cd android
           ./gradlew assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/Carline.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: carline-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/Carline.apk
