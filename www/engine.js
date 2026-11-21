@@ -150,12 +150,12 @@
       const smoothCurv = 0.25 * cPrev + 0.5 * cCurr + 0.25 * cNext;
       samples[i].curvature = smoothCurv;
 
-      const safeFromMagnet = smoothCurv > 0.00025
-        ? Math.sqrt((grip * 10000) / smoothCurv)
+      const safeFromMagnet = smoothCurv > 0.00035
+        ? Math.sqrt(grip / smoothCurv)
         : physics.maxSpeed;
       const clampedSafe = Math.max(physics.autoMinCornerSpeed, Math.min(physics.maxSpeed, safeFromMagnet));
       samples[i].maxSafeSpeed = clampedSafe;
-      samples[i].dangerRatio = Math.max(0, Math.min(1, 1 - (clampedSafe - 70) / (physics.maxSpeed - 70)));
+      samples[i].dangerRatio = Math.max(0, Math.min(1, 1 - (clampedSafe - 72) / (physics.maxSpeed - 72)));
     }
 
     return {
