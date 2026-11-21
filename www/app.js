@@ -38,17 +38,15 @@
     dom.hudWins = document.getElementById("hudWins");
     dom.hudLaps = document.getElementById("hudLaps");
     dom.hudTargetLaps = document.getElementById("hudTargetLaps");
-    dom.hudExits = document.getElementById("hudExits");
     dom.btnSettings = document.getElementById("btnSettings");
     dom.statusBar = document.getElementById("statusBar");
     dom.statusText = document.getElementById("statusText");
+    dom.statusSubText = document.getElementById("statusSubText");
     dom.btnModeAuto = document.getElementById("btnModeAuto");
     dom.btnModeManual = document.getElementById("btnModeManual");
     dom.boardCard = document.getElementById("boardCard");
     dom.canvas = document.getElementById("trackCanvas");
     dom.ctx = dom.canvas.getContext("2d");
-    dom.hudSpeed = document.getElementById("hudSpeed");
-    dom.hudGripBadge = document.getElementById("hudGripBadge");
     dom.btnUndo = document.getElementById("btnUndo");
     dom.btnGuide = document.getElementById("btnGuide");
     dom.btnHint = document.getElementById("btnHint");
@@ -280,15 +278,25 @@
 
     if (state.statusMessageKey) {
       dom.statusText.textContent = getText(state.lang, state.statusMessageKey);
-      return;
-    }
-
-    if (state.phase === "drawing") {
+    } else if (state.phase === "drawing") {
       dom.statusText.textContent = getText(state.lang, "statusDraw");
     } else if (state.mode === "auto") {
       dom.statusText.textContent = getText(state.lang, "statusAutoDemo");
     } else {
       dom.statusText.textContent = getText(state.lang, "statusManualDrive");
+    }
+
+    if (state.phase === "drawing") {
+      dom.statusSubText.textContent = getText(state.lang, "statusDrawSub");
+    } else {
+      const spd = Math.round(state.car.speed);
+      let gripStr = getText(state.lang, "gripOk");
+      if (state.car.phase === "flying" || state.car.phase === "dropped") {
+        gripStr = getText(state.lang, "gripOut");
+      } else if (state.mode === "manual" && state.car.gripLoadRatio > 0.82) {
+        gripStr = getText(state.lang, "gripWarn");
+      }
+      dom.statusSubText.textContent = `${getText(state.lang, "speedLabel")}: ${spd} • ${gripStr} • ${getText(state.lang, "exitsShort")}: ${state.car.offTrackCount}`;
     }
   }
 
@@ -306,8 +314,6 @@
     dom.hudWins.textContent = String(state.profile.wins);
     dom.hudLaps.textContent = String(state.car.lapsCompleted);
     dom.hudTargetLaps.textContent = String(state.settings.lapsToWin);
-    dom.hudExits.textContent = String(state.car.offTrackCount);
-    dom.hudSpeed.textContent = String(Math.round(state.car.speed));
 
     dom.btnModeAuto.classList.toggle("active", state.mode === "auto");
     dom.btnModeManual.classList.toggle("active", state.mode === "manual");
@@ -315,13 +321,7 @@
     dom.btnUndo.disabled = state.phase !== "driving";
     dom.btnHint.disabled = state.phase !== "driving";
 
-    if (state.car.phase === "flying" || state.car.phase === "dropped") {
-      dom.hudGripBadge.textContent = getText(state.lang, "gripOut");
-    } else if (state.mode === "manual" && state.car.gripLoadRatio > 0.82) {
-      dom.hudGripBadge.textContent = getText(state.lang, "gripWarn");
-    } else {
-      dom.hudGripBadge.textContent = getText(state.lang, "gripOk");
-    }
+    renderStatus();
   }
 
   function resizeCanvas() {
@@ -592,7 +592,6 @@
     state.statusMessageKey = null;
     state.statusTone = "default";
     updateHud();
-    renderStatus();
     renderCanvas();
     persistSession();
   }
@@ -631,6 +630,32 @@
       x: ev.clientX - rect.left,
       y: ev.clientY - rect.top
     };
+  }
+
+  function getThemePreviewSvg(id) {
+    if (id === "emerald") {
+      return `<svg width="22" height="22" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="4" fill="#065f46" stroke="#fbbf24" stroke-width="2.5"/><rect x="8" y="9" width="8" height="6" rx="1.5" fill="#ecfdf5"/></svg>`;
+    }
+    if (id === "tournament") {
+      return `<svg width="22" height="22" viewBox="0 0 24 24"><circle cx="8.5" cy="8.5" r="3" fill="#2563eb"/><circle cx="15.5" cy="8.5" r="3" fill="#16a34a"/><circle cx="8.5" cy="15.5" r="3" fill="#d97706"/><circle cx="15.5" cy="15.5" r="3" fill="#e11d48"/></svg>`;
+    }
+    if (id === "royal") {
+      return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18h18M4 15l2-9 6 5 6-5 2 9H4z"/></svg>`;
+    }
+    return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1e293b" stroke-width="2.2"><rect x="4" y="6" width="16" height="12" rx="3"/><line x1="12" y1="6" x2="12" y2="18"/></svg>`;
+  }
+
+  function getCarPreviewSvg(id) {
+    if (id === "formula") {
+      return `<svg width="26" height="22" viewBox="0 0 28 22"><polygon points="24,11 5,4 8,11 5,18" fill="#e11d48" stroke="#1e293b" stroke-width="1.6"/></svg>`;
+    }
+    if (id === "prototype") {
+      return `<svg width="26" height="22" viewBox="0 0 28 22"><rect x="3" y="5" width="22" height="12" rx="5" fill="#2563eb" stroke="#1e293b" stroke-width="1.6"/><rect x="15" y="8" width="5" height="6" rx="1" fill="#ffffff"/></svg>`;
+    }
+    if (id === "neon_dot") {
+      return `<svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="#7c3aed" stroke="#1e293b" stroke-width="1.6"/><circle cx="15" cy="12" r="2.2" fill="#ffffff"/></svg>`;
+    }
+    return `<svg width="26" height="22" viewBox="0 0 28 22"><rect x="4" y="5" width="20" height="12" rx="3.5" fill="#e11d48" stroke="#1e293b" stroke-width="1.6"/><rect x="15" y="8.5" width="4.5" height="5" fill="#ffffff"/></svg>`;
   }
 
   function bindEvents() {
@@ -826,11 +851,18 @@
     const themesHtml = CONFIG.themes.map((t) => {
       const unlocked = state.profile.unlockedThemes.includes(t.id);
       const selected = state.profile.selectedTheme === t.id;
-      const cls = `reward-tile ${selected ? "selected" : ""} ${!unlocked ? "locked" : ""}`;
+      const cls = `visual-tile ${selected ? "active" : ""} ${!unlocked ? "locked" : ""}`;
+      const subLabel = !unlocked
+        ? `🔒 ${getText(state.lang, t.reqKey)}`
+        : t.requiredWins === 0
+          ? getText(state.lang, "reqDefault")
+          : getText(state.lang, "unlockedText");
       return `
         <button class="${cls}" data-theme-id="${t.id}" type="button" ${!unlocked ? "disabled" : ""}>
-          <span class="reward-name">${getText(state.lang, t.nameKey)}</span>
-          <span class="reward-req">${getText(state.lang, t.reqKey)}</span>
+          ${selected ? '<span class="tile-check">✓</span>' : ""}
+          <span class="tile-icon">${getThemePreviewSvg(t.id)}</span>
+          <span class="tile-name">${getText(state.lang, t.nameKey)}</span>
+          <span class="tile-sub">${subLabel}</span>
         </button>
       `;
     }).join("");
@@ -838,77 +870,84 @@
     const carsHtml = CONFIG.carStyles.map((c) => {
       const unlocked = state.profile.unlockedCars.includes(c.id);
       const selected = state.profile.selectedCar === c.id;
-      const cls = `reward-tile ${selected ? "selected" : ""} ${!unlocked ? "locked" : ""}`;
+      const cls = `visual-tile ${selected ? "active" : ""} ${!unlocked ? "locked" : ""}`;
+      const subLabel = !unlocked
+        ? `🔒 ${getText(state.lang, c.reqKey)}`
+        : c.requiredWins === 0
+          ? getText(state.lang, "reqDefault")
+          : getText(state.lang, "unlockedText");
       return `
         <button class="${cls}" data-car-id="${c.id}" type="button" ${!unlocked ? "disabled" : ""}>
-          <span class="reward-name">${getText(state.lang, c.nameKey)}</span>
-          <span class="reward-req">${getText(state.lang, c.reqKey)}</span>
+          ${selected ? '<span class="tile-check">✓</span>' : ""}
+          <span class="tile-icon">${getCarPreviewSvg(c.id)}</span>
+          <span class="tile-name">${getText(state.lang, c.nameKey)}</span>
+          <span class="tile-sub">${subLabel}</span>
         </button>
       `;
     }).join("");
 
     dom.modalCard.innerHTML = `
       <h2 class="modal-title" id="settingsModalTitle">${getText(state.lang, "settingsTitle")}</h2>
+
       <div class="stats-grid-4" id="settingsStatsBox">
         <div>
-          <div class="stat-cell-val">${state.profile.wins}</div>
           <div class="stat-cell-lbl">${getText(state.lang, "statWins")}</div>
+          <div class="stat-cell-val">${state.profile.wins}</div>
         </div>
         <div>
-          <div class="stat-cell-val">${state.profile.masterWins}</div>
-          <div class="stat-cell-lbl">${getText(state.lang, "statMaster")}</div>
+          <div class="stat-cell-lbl">👑 ${getText(state.lang, "statMaster")}</div>
+          <div class="stat-cell-val gold">${state.profile.masterWins}</div>
         </div>
         <div>
-          <div class="stat-cell-val">${state.profile.totalLaps}</div>
           <div class="stat-cell-lbl">${getText(state.lang, "statLaps")}</div>
+          <div class="stat-cell-val">${state.profile.totalLaps}</div>
         </div>
         <div>
-          <div class="stat-cell-val">${state.profile.tracksBuilt}</div>
           <div class="stat-cell-lbl">${getText(state.lang, "statTracks")}</div>
+          <div class="stat-cell-val">${state.profile.tracksBuilt}</div>
         </div>
       </div>
 
-      <div class="settings-grid-2">
-        <div class="setting-tile">
-          <span>${getText(state.lang, "langLabel")}</span>
-          <select id="selLang">
-            <option value="cs" ${state.lang === "cs" ? "selected" : ""}>Čeština</option>
-            <option value="en" ${state.lang === "en" ? "selected" : ""}>English</option>
-          </select>
-        </div>
-        <div class="setting-tile">
-          <span>${getText(state.lang, "diffLabel")}</span>
-          <select id="selDiff">
-            <option value="easy" ${state.settings.difficulty === "easy" ? "selected" : ""}>${getText(state.lang, "diffEasy")}</option>
-            <option value="normal" ${state.settings.difficulty === "normal" ? "selected" : ""}>${getText(state.lang, "diffNormal")}</option>
-            <option value="hard" ${state.settings.difficulty === "hard" ? "selected" : ""}>${getText(state.lang, "diffHard")}</option>
-          </select>
-        </div>
-        <div class="setting-tile">
-          <span>${getText(state.lang, "soundLabel")}</span>
-          <button id="btnToggleSound" type="button">${getText(state.lang, state.settings.sound ? "onText" : "offText")}</button>
-        </div>
-        <div class="setting-tile">
-          <span>${getText(state.lang, "hapticsLabel")}</span>
-          <button id="btnToggleHaptics" type="button">${getText(state.lang, state.settings.haptics ? "onText" : "offText")}</button>
-        </div>
-        <div class="setting-tile" style="grid-column: span 2;">
-          <span>${getText(state.lang, "lapsGoalLabel")}</span>
-          <select id="selLapsGoal">
-            <option value="1" ${state.settings.lapsToWin === 1 ? "selected" : ""}>1</option>
-            <option value="3" ${state.settings.lapsToWin === 3 ? "selected" : ""}>3</option>
-            <option value="5" ${state.settings.lapsToWin === 5 ? "selected" : ""}>5</option>
-          </select>
-        </div>
+      <div class="section-heading">${getText(state.lang, "langHeading")}</div>
+      <div class="choice-grid-2">
+        <button class="choice-btn ${state.lang === "cs" ? "active" : ""}" data-lang="cs" type="button">🇨🇿 Čeština</button>
+        <button class="choice-btn ${state.lang === "en" ? "active" : ""}" data-lang="en" type="button">🇬🇧 English</button>
       </div>
 
-      <div class="section-label">${getText(state.lang, "themesSection")}</div>
-      <div class="reward-grid">${themesHtml}</div>
+      <div class="section-heading">${getText(state.lang, "soundVibHeading")}</div>
+      <div class="choice-grid-2">
+        <button id="btnToggleSound" class="choice-btn ${state.settings.sound ? "active" : ""}" type="button">
+          🔊 ${getText(state.lang, state.settings.sound ? "soundOn" : "soundOff")}
+        </button>
+        <button id="btnToggleHaptics" class="choice-btn ${state.settings.haptics ? "active" : ""}" type="button">
+          📳 ${getText(state.lang, state.settings.haptics ? "vibOn" : "vibOff")}
+        </button>
+      </div>
 
-      <div class="section-label">${getText(state.lang, "carsSection")}</div>
-      <div class="reward-grid">${carsHtml}</div>
+      <div class="section-heading">${getText(state.lang, "magnetHeading")}</div>
+      <div class="choice-grid-3">
+        <button class="choice-btn ${state.settings.difficulty === "easy" ? "active" : ""}" data-diff="easy" type="button">${getText(state.lang, "diffEasy")}</button>
+        <button class="choice-btn ${state.settings.difficulty === "normal" ? "active" : ""}" data-diff="normal" type="button">${getText(state.lang, "diffNormal")}</button>
+        <button class="choice-btn ${state.settings.difficulty === "hard" ? "active" : ""}" data-diff="hard" type="button">${getText(state.lang, "diffHard")}</button>
+      </div>
+
+      <div class="section-heading">${getText(state.lang, "lapsGoalHeading")}</div>
+      <div class="choice-grid-3">
+        <button class="choice-btn ${state.settings.lapsToWin === 1 ? "active" : ""}" data-laps="1" type="button">${getText(state.lang, "lapsGoal1")}</button>
+        <button class="choice-btn ${state.settings.lapsToWin === 3 ? "active" : ""}" data-laps="3" type="button">${getText(state.lang, "lapsGoal3")}</button>
+        <button class="choice-btn ${state.settings.lapsToWin === 5 ? "active" : ""}" data-laps="5" type="button">${getText(state.lang, "lapsGoal5")}</button>
+      </div>
+
+      <div class="section-heading">${getText(state.lang, "themesHeading")}</div>
+      <div class="tile-grid-2">${themesHtml}</div>
+
+      <div class="section-heading">${getText(state.lang, "carsHeading")}</div>
+      <div class="tile-grid-2">${carsHtml}</div>
+
+      <div class="info-callout">${getText(state.lang, "unlockInfoHtml")}</div>
 
       <button id="btnSaveSettings" class="modal-full-btn" type="button">${getText(state.lang, "saveAndClose")}</button>
+      <div class="author-footer">&copy; 2026 Ondrandy</div>
     `;
 
     dom.modalBackdrop.classList.add("open");
@@ -942,27 +981,16 @@
       }
     });
 
-    document.getElementById("selLang").addEventListener("change", (e) => {
-      state.settings.lang = e.target.value;
-      state.lang = detectLanguage(state.settings.lang);
-      applyI18n();
-      updateHud();
-      persistProfile();
-      openSettingsModal();
-    });
-
-    document.getElementById("selDiff").addEventListener("change", (e) => {
-      state.settings.difficulty = e.target.value;
-      resizeCanvas();
-      renderCanvas();
-      persistProfile();
-    });
-
-    document.getElementById("selLapsGoal").addEventListener("change", (e) => {
-      state.settings.lapsToWin = Number(e.target.value) || 3;
-      updateHud();
-      persistProfile();
-    });
+    for (const btn of dom.modalCard.querySelectorAll("[data-lang]")) {
+      btn.addEventListener("click", () => {
+        state.settings.lang = btn.getAttribute("data-lang");
+        state.lang = detectLanguage(state.settings.lang);
+        applyI18n();
+        updateHud();
+        persistProfile();
+        openSettingsModal();
+      });
+    }
 
     document.getElementById("btnToggleSound").addEventListener("click", () => {
       state.settings.sound = !state.settings.sound;
@@ -976,6 +1004,25 @@
       persistProfile();
       openSettingsModal();
     });
+
+    for (const btn of dom.modalCard.querySelectorAll("[data-diff]")) {
+      btn.addEventListener("click", () => {
+        state.settings.difficulty = btn.getAttribute("data-diff");
+        resizeCanvas();
+        renderCanvas();
+        persistProfile();
+        openSettingsModal();
+      });
+    }
+
+    for (const btn of dom.modalCard.querySelectorAll("[data-laps]")) {
+      btn.addEventListener("click", () => {
+        state.settings.lapsToWin = Number(btn.getAttribute("data-laps")) || 3;
+        updateHud();
+        persistProfile();
+        openSettingsModal();
+      });
+    }
 
     for (const btn of dom.modalCard.querySelectorAll("[data-theme-id]")) {
       btn.addEventListener("click", () => {
@@ -1015,31 +1062,28 @@
     state.modalOpenedAt = performance.now();
     dom.modalCard.innerHTML = `
       <h2 class="modal-title">${getText(state.lang, "guideTitle")}</h2>
-      <p style="margin:0 0 8px 0; font-size:13px; line-height:1.4;">${getText(state.lang, "guideGoal")}</p>
+      <p class="guide-p">${getText(state.lang, "guideGoal")}</p>
 
+      <div class="section-heading" style="margin-top:0;">${getText(state.lang, "guideControlsTitle")}</div>
       <div class="guide-box gray">
-        <strong>${getText(state.lang, "guideControlsTitle")}</strong>
         <ul>
           <li>${getText(state.lang, "guideCtrl1")}</li>
           <li>${getText(state.lang, "guideCtrl2")}</li>
           <li>${getText(state.lang, "guideCtrl3")}</li>
           <li>${getText(state.lang, "guideCtrl4")}</li>
+          <li>${getText(state.lang, "guideCtrl5")}</li>
         </ul>
       </div>
 
+      <p class="guide-p">${getText(state.lang, "guideGoldenRule")}</p>
+
       <div class="guide-box green">
-        <strong>${getText(state.lang, "guideMagnetTitle")}</strong><br />
-        ${getText(state.lang, "guideMagnetBody")}
+        <strong>${getText(state.lang, "guideGreenTitle")}</strong><br />
+        ${getText(state.lang, "guideGreenBody")}
       </div>
 
-      <div class="guide-box red">
-        <strong>${getText(state.lang, "guideWarnTitle")}</strong><br />
-        ${getText(state.lang, "guideWarnBody")}
-      </div>
-
-      <p style="margin:0 0 8px 0; font-size:12px; color:var(--text-muted); line-height:1.4;">
-        ${getText(state.lang, "guideRewards")}
-      </p>
+      <p class="guide-warn">${getText(state.lang, "guideWarnHtml")}</p>
+      <p class="guide-rewards">${getText(state.lang, "guideRewardsHtml")}</p>
 
       <button id="btnCloseGuide" class="modal-full-btn" type="button">${getText(state.lang, "guideGotIt")}</button>
       <div class="author-footer">&copy; 2026 Ondrandy</div>
@@ -1087,7 +1131,7 @@
       </div>
 
       <h2 class="modal-title">${getText(state.lang, "winTitle")}</h2>
-      <p style="margin:0 0 10px 0; text-align:center; font-size:13px; color:var(--text-muted); line-height:1.4;">
+      <p class="guide-p" style="text-align:center; color:var(--text-muted);">
         ${getText(state.lang, "winCongrats")}
       </p>
 
@@ -1107,7 +1151,7 @@
           <div class="stat-cell-lbl">${getText(state.lang, "winStatCrossings")}</div>
         </div>
         <div>
-          <div class="stat-cell-val">${state.profile.wins}</div>
+          <div class="stat-cell-val gold">${state.profile.wins}</div>
           <div class="stat-cell-lbl">${getText(state.lang, "winStatTotalWins")}</div>
         </div>
       </div>
@@ -1116,6 +1160,7 @@
         <button id="btnWinBoard" class="modal-sec-btn" type="button">${getText(state.lang, "btnBoard")}</button>
         <button id="btnWinAgain" class="modal-full-btn" style="margin-top:0;" type="button">${getText(state.lang, "btnPlayAgain")}</button>
       </div>
+      <div class="author-footer">&copy; 2026 Ondrandy</div>
     `;
 
     dom.modalBackdrop.classList.add("open");
