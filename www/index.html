@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Carline</title>
+  <style>
+    :root {
+      --bg-app: #f3f5f8;
+      --bg-surface: #ffffff;
+      --bg-track: #e2e8f0;
+      --track-stroke: #1e293b;
+      --track-under: #64748b;
+      --track-over: #0f172a;
+      --car-color: #ef4444;
+      --start-color: #16a34a;
+      --text-main: #0f172a;
+      --text-muted: #475569;
+      --accent: #2563eb;
+      --accent-text: #ffffff;
+      --border: #cbd5e1;
+      --danger: #dc2626;
+      --radius: 12px;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    body[data-theme="neon"] {
+      --bg-app: #090d16;
+      --bg-surface: #111827;
+      --bg-track: #1e293b;
+      --track-stroke: #38bdf8;
+      --track-under: #0284c7;
+      --track-over: #7dd3fc;
+      --car-color: #f43f5e;
+      --start-color: #22c55e;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #06b6d4;
+      --accent-text: #06202a;
+      --border: #273549;
+    }
+
+    body[data-theme="blueprint"] {
+      --bg-app: #0c2d48;
+      --bg-surface: #145da0;
+      --bg-track: #2e8bc0;
+      --track-stroke: #b1d4e0;
+      --track-under: #68b0ab;
+      --track-over: #ffffff;
+      --car-color: #fbbf24;
+      --start-color: #4ade80;
+      --text-main: #f0f9ff;
+      --text-muted: #bae6fd;
+      --accent: #f59e0b;
+      --accent-text: #111827;
+      --border: #4aa3df;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg-app);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      padding-top: var(--safe-top);
+      padding-bottom: var(--safe-bottom);
+    }
+
+    header.top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      z-index: 10;
+    }
+
+    .brand-block {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+      line-height: 1.1;
+    }
+
+    .stats-strip {
+      display: flex;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      flex-wrap: wrap;
+    }
+
+    .stats-strip strong {
+      color: var(--text-main);
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    button.btn {
+      border: 1px solid var(--border);
+      background: var(--bg-surface);
+      color: var(--text-main);
+      border-radius: var(--radius);
+      padding: 7px 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    button.btn.primary {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+
+    button.btn.active {
+      outline: 2px solid var(--accent);
+      background: var(--accent);
+      color: var(--accent-text);
+    }
+
+    button.btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .control-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      z-index: 9;
+    }
+
+    .mode-group {
+      display: flex;
+      gap: 6px;
+    }
+
+    .speed-readout {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: right;
+      line-height: 1.25;
+    }
+
+    .speed-readout strong {
+      color: var(--text-main);
+      font-size: 13px;
+    }
+
+    .canvas-stage {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      min-height: 0;
+      touch-action: none;
+    }
+
+    canvas#trackCanvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    .phase-banner {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--text-main);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+      pointer-events: none;
+      text-align: center;
+    }
+
+    .phase-banner span.sub {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.62);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 40;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal-card {
+      width: 100%;
+      max-width: 420px;
+      max-height: 85vh;
+      overflow-y: auto;
+      background: var(--bg-surface);
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .modal-title {
+      font-size: 17px;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .modal-section {
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-section:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 6px 0;
+      font-size: 14px;
+    }
+
+    .theme-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .theme-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-app);
+    }
+
+    .theme-item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .theme-item-name {
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .theme-item-req {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    #landscapeGuard {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #0f172a;
+      color: #f8fafc;
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    @media (orientation: landscape) and (max-height: 540px) {
+      #landscapeGuard {
+        display: flex;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="landscapeGuard">
+    <div>Otočte prosím telefon zpět na výšku (Portrait) / Please rotate your device back to Portrait mode.</div>
+  </div>
+
+  <div id="app">
+    <header class="top-bar">
+      <div class="brand-block">
+        <div class="brand-title">Carline</div>
+        <div class="stats-strip">
+          <span><span data-i18n="statWins">Výhry</span>: <strong id="statWins">0</strong></span>
+          <span><span data-i18n="statLaps">Kola</span>: <strong id="statLaps">0</strong></span>
+          <span><span data-i18n="statOffTrack">Vyletění</span>: <strong id="statOffTrack">0</strong></span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btnNewTrack" class="btn" type="button" data-i18n="newTrack">Nová dráha</button>
+        <button id="btnProfile" class="btn" type="button" data-i18n="profile">Profil</button>
+      </div>
+    </header>
+
+    <div class="control-bar">
+      <div class="mode-group">
+        <button id="btnModeAuto" class="btn active" type="button" data-i18n="modeAuto">Auto</button>
+        <button id="btnModeManual" class="btn" type="button" data-i18n="modeManual">Manuál</button>
+      </div>
+      <div class="speed-readout">
+        <div><span data-i18n="speedLabel">Rychlost</span>: <strong id="speedValue">0</strong></div>
+        <div id="modeHintText" data-i18n="hintAuto">Automatická bezpečná jízda</div>
+      </div>
+    </div>
+
+    <div id="canvasStage" class="canvas-stage">
+      <canvas id="trackCanvas"></canvas>
+      <div id="phaseBanner" class="phase-banner">
+        <span id="phaseMainText" data-i18n="drawPrompt">Nakreslete prstem smyčku autodráhy – konec se spojí se začátkem.</span>
+        <span id="phaseSubText" class="sub" data-i18n="drawSub">Křížení řadí vrstvy: 1. průchod dole, další nahoře.</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div id="modalCard" class="modal-card"></div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
