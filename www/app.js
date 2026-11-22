@@ -360,7 +360,7 @@
     dom.hudTargetLaps.textContent = String(state.settings.lapsToWin);
 
     dom.btnHint.classList.toggle("active-hint", state.showBrakingZones);
-    dom.btnUndo.disabled = state.phase !== "racing";
+    dom.btnUndo.disabled = state.phase === "drawing";
     dom.btnHint.disabled = state.phase === "drawing";
 
     renderStatus();
@@ -408,7 +408,8 @@
       trackOver: cs.getPropertyValue("--track-over").trim(),
       carColor: cs.getPropertyValue("--car-color").trim(),
       ghostColor: cs.getPropertyValue("--ghost-color").trim(),
-      startColor: cs.getPropertyValue("--start-color").trim()
+      startColor: cs.getPropertyValue("--start-color").trim(),
+      wall: cs.getPropertyValue("--wall").trim()
     };
   }
 
@@ -685,24 +686,42 @@
   }
 
   function returnCarToStart() {
-    if (state.phase !== "racing" || !state.track) return;
+    if ((state.phase !== "demo" && state.phase !== "racing") || !state.track) return;
     const startPt = Engine.sampleAtDistance(state.track, 0);
-    const initialSpeed = state.settings.launchWithGas ? CONFIG.physics.manualStartSpeed : 0;
+    state.sparks = [];
 
-    state.car.s = 0;
-    state.car.lapProgress = 0;
-    state.car.speed = initialSpeed;
-    state.car.targetSpeed = initialSpeed;
-    state.car.phase = "driving";
-    state.car.phaseTimer = 0;
-    state.car.visible = true;
-    state.car.scale = 1;
-    state.car.gripLoadRatio = 0;
-    state.car.driftAngle = 0;
+    if (state.phase === "demo") {
+      state.car = Engine.createCarState();
+      state.car.x = startPt.x;
+      state.car.y = startPt.y;
+      state.car.angle = Math.atan2(startPt.ty, startPt.tx);
+      state.car.speed = 0;
+      state.car.targetSpeed = CONFIG.physics.autoCruiseMax;
+
+      triggerHaptic("light");
+      setStatus("statusResetStart", "trial", 1600);
+      updateHud();
+      renderCanvas(0.016);
+      persistSession();
+      return;
+    }
+
+    const initialSpeed = state.settings.launchWithGas ? CONFIG.physics.manualStartSpeed : 0;
+    state.raceElapsedSec = 0;
+
+    state.car = Engine.createCarState();
     state.car.x = startPt.x;
     state.car.y = startPt.y;
     state.car.angle = Math.atan2(startPt.ty, startPt.tx);
-    state.sparks = [];
+    state.car.speed = initialSpeed;
+    state.car.targetSpeed = initialSpeed;
+
+    state.ghostCar = Engine.createCarState();
+    state.ghostCar.x = startPt.x;
+    state.ghostCar.y = startPt.y;
+    state.ghostCar.angle = Math.atan2(startPt.ty, startPt.tx);
+    state.ghostCar.speed = 90;
+    state.ghostCar.targetSpeed = CONFIG.physics.autoCruiseMax;
 
     triggerHaptic("light");
     setStatus("statusResetStart", "trial", 1600);
@@ -765,16 +784,20 @@
   }
 
   function getCarPreviewSvg(id) {
+    const styles = getStyles();
+    const fill = styles.carColor || "#e11d48";
+    const stroke = styles.wall || "#1e293b";
+
     if (id === "formula") {
-      return `<svg width="26" height="22" viewBox="0 0 28 22"><polygon points="24,11 5,4 8,11 5,18" fill="#e11d48" stroke="#1e293b" stroke-width="1.6"/></svg>`;
+      return `<svg width="26" height="22" viewBox="0 0 28 22"><polygon points="24,11 5,4 8,11 5,18" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/></svg>`;
     }
     if (id === "prototype") {
-      return `<svg width="26" height="22" viewBox="0 0 28 22"><rect x="3" y="5" width="22" height="12" rx="5" fill="#2563eb" stroke="#1e293b" stroke-width="1.6"/><rect x="15" y="8" width="5" height="6" rx="1" fill="#ffffff"/></svg>`;
+      return `<svg width="26" height="22" viewBox="0 0 28 22"><rect x="3" y="5" width="22" height="12" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/><rect x="15" y="8" width="5" height="6" rx="1" fill="#ffffff"/></svg>`;
     }
     if (id === "neon_dot") {
-      return `<svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="#7c3aed" stroke="#1e293b" stroke-width="1.6"/><circle cx="15" cy="12" r="2.2" fill="#ffffff"/></svg>`;
+      return `<svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/><circle cx="15" cy="12" r="2.2" fill="#ffffff"/></svg>`;
     }
-    return `<svg width="26" height="22" viewBox="0 0 28 22"><rect x="4" y="5" width="20" height="12" rx="3.5" fill="#e11d48" stroke="#1e293b" stroke-width="1.6"/><rect x="15" y="8.5" width="4.5" height="5" fill="#ffffff"/></svg>`;
+    return `<svg width="26" height="22" viewBox="0 0 28 22"><rect x="4" y="5" width="20" height="12" rx="3.5" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/><rect x="15" y="8.5" width="4.5" height="5" fill="#ffffff"/></svg>`;
   }
 
   function bindEvents() {
