@@ -682,13 +682,23 @@
     }
 
     const startPt = pts[0];
-    ctx.beginPath();
-    ctx.arc(startPt.x, startPt.y, 11, 0, Math.PI * 2);
-    ctx.fillStyle = styles.startColor;
-    ctx.fill();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = "#ffffff";
-    ctx.stroke();
+    const startAngle = Math.atan2(startPt.ty, startPt.tx);
+    ctx.save();
+    ctx.translate(startPt.x, startPt.y);
+    ctx.rotate(startAngle);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(-4, -12, 8, 24);
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(-4, -12, 4, 6);
+    ctx.fillRect(0, -6, 4, 6);
+    ctx.fillRect(-4, 0, 4, 6);
+    ctx.fillRect(0, 6, 4, 6);
+
+    ctx.strokeStyle = styles.startColor;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-4.5, -12.5, 9, 25);
+    ctx.restore();
 
     ctx.restore();
   }
