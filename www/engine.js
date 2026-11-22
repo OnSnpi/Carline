@@ -158,6 +158,7 @@
 
       samples.push({
         index: k,
+        drawOrder: k,
         s: targetS,
         tNorm: k / count,
         x: a.x + (b.x - a.x) * t,
@@ -263,18 +264,27 @@
         const b2 = samples[(j + 1) % n];
         const hit = segmentIntersection(a1, a2, b1, b2);
         if (hit) {
-          const alreadyNear = crossings.some((c) => Math.hypot(c.x - hit.x, c.y - hit.y) < 10);
+          const alreadyNear = crossings.some((c) => Math.hypot(c.x - hit.x, c.y - hit.y) < 12);
           if (!alreadyNear) {
+            const orderA = typeof a1.drawOrder === "number" ? a1.drawOrder : i;
+            const orderB = typeof b1.drawOrder === "number" ? b1.drawOrder : j;
+            const underIdx = orderA <= orderB ? i : j;
+            const overIdx = orderA <= orderB ? j : i;
+            const overOrder = Math.max(orderA, orderB);
+
             crossings.push({
               x: hit.x,
               y: hit.y,
-              underIndex: i,
-              overIndex: j
+              underIndex: underIdx,
+              overIndex: overIdx,
+              overOrder
             });
           }
         }
       }
     }
+
+    crossings.sort((a, b) => a.overOrder - b.overOrder);
     return crossings;
   }
 
@@ -334,6 +344,7 @@
       const src = samples[(shiftIdx + k) % n];
       rotated.push({
         index: k,
+        drawOrder: src.drawOrder,
         s: k * stepLen,
         tNorm: k / n,
         x: src.x,
