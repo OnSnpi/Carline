@@ -571,11 +571,23 @@
   function isSampleUnderBridge(track, sampleIdx) {
     if (!track || !track.crossings || track.crossings.length === 0) return false;
     const n = track.samples.length;
-    const span = 12;
-    for (const cr of track.crossings) {
-      let diff = Math.abs(sampleIdx - cr.underIndex);
+    const underSpan = 7;
+    const overPrioritySpan = 10;
+
+    function circularDiff(a, b) {
+      let diff = Math.abs(a - b);
       if (diff > n * 0.5) diff = n - diff;
-      if (diff <= span) {
+      return diff;
+    }
+
+    for (const cr of track.crossings) {
+      if (circularDiff(sampleIdx, cr.overIndex) <= overPrioritySpan) {
+        return false;
+      }
+    }
+
+    for (const cr of track.crossings) {
+      if (circularDiff(sampleIdx, cr.underIndex) <= underSpan) {
         return true;
       }
     }
@@ -585,7 +597,7 @@
   function drawBridgeOverpassSegment(ctx, track, cr, styles) {
     const pts = track.samples;
     const n = pts.length;
-    const halfSpan = 14;
+    const halfSpan = 9;
 
     ctx.save();
     ctx.lineCap = "butt";
@@ -1047,7 +1059,8 @@
     if (id === "royal") {
       return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18h18M4 15l2-9 6 5 6-5 2 9H4z"/></svg>`;
     }
-    return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1e293b" stroke-width="2.2"><rect x="4" y="6" width="16" height="12" rx="3"/><line x1="12" y1="6" x2="12" y2="18"/></svg>`;
+    const classicStroke = state.profile.selectedTheme === "classic" ? "#1e293b" : "#ffffff";
+    return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${classicStroke}" stroke-width="2.2"><rect x="4" y="6" width="16" height="12" rx="3"/><line x1="12" y1="6" x2="12" y2="18"/></svg>`;
   }
 
   function getCarPreviewSvg(id) {
