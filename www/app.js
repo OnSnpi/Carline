@@ -568,11 +568,20 @@
     ctx.restore();
   }
 
-  function isSampleUnderBridge(track, sampleIdx) {
-    if (!track || !track.crossings || track.crossings.length === 0) return false;
+  function getCarBridgeSpanBonus(carStyleId) {
+    if (carStyleId === "truck") return 4;
+    if (carStyleId === "bus") return 3;
+    if (carStyleId === "prototype") return 2;
+    return 1;
+  }
+
+  function isCarUnderBridge(track, carObj, carStyleId) {
+    if (!track || !track.crossings || track.crossings.length === 0 || !carObj) return false;
     const n = track.samples.length;
-    const underSpan = 7;
-    const overPrioritySpan = 10;
+    const sampleIdx = carObj.sampleIndex || 0;
+    const lengthBonus = getCarBridgeSpanBonus(carStyleId);
+    const overPrioritySpan = 9;
+    const underSpan = 10 + lengthBonus;
 
     function circularDiff(a, b) {
       let diff = Math.abs(a - b);
@@ -590,6 +599,13 @@
       if (circularDiff(sampleIdx, cr.underIndex) <= underSpan) {
         return true;
       }
+      if (
+        typeof carObj.x === "number" &&
+        typeof carObj.y === "number" &&
+        Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 21 + lengthBonus * 2
+      ) {
+        return true;
+      }
     }
     return false;
   }
@@ -597,7 +613,7 @@
   function drawBridgeOverpassSegment(ctx, track, cr, styles) {
     const pts = track.samples;
     const n = pts.length;
-    const halfSpan = 9;
+    const halfSpan = 10;
 
     ctx.save();
     ctx.lineCap = "butt";
@@ -866,7 +882,9 @@
     drawTrackBase(dom.ctx, styles);
 
     if (state.phase === "demo") {
-      const carUnder = state.car.phase === "driving" && isSampleUnderBridge(state.track, state.car.sampleIndex);
+      const carUnder =
+        state.car.phase === "driving" &&
+        isCarUnderBridge(state.track, state.car, state.profile.selectedCar);
       if (carUnder) {
         drawCarEntity(dom.ctx, state.car, styles.carColor, false);
         drawAllBridges(dom.ctx, styles);
@@ -879,8 +897,10 @@
 
     if (state.phase === "racing") {
       updateAndDrawSparks(dom.ctx, dt || 0.016);
-      const ghostUnder = isSampleUnderBridge(state.track, state.ghostCar.sampleIndex);
-      const playerUnder = state.car.phase === "driving" && isSampleUnderBridge(state.track, state.car.sampleIndex);
+      const ghostUnder = isCarUnderBridge(state.track, state.ghostCar, "classic_car");
+      const playerUnder =
+        state.car.phase === "driving" &&
+        isCarUnderBridge(state.track, state.car, state.profile.selectedCar);
 
       if (ghostUnder) {
         drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
