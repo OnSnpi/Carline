@@ -29,9 +29,8 @@
     statusTone: "default",
     statusTimeoutId: null,
     lastFrameTime: 0,
-    lastEngineSoundMs: 0,
     lastHapticMs: 0,
-    audioCtx: null
+    audioEngine: null
   };
 
   const dom = {};
@@ -129,65 +128,157 @@
     return value * (1 + delta);
   }
 
-  function ensureAudioContext() {
+  function initContinuousAudio() {
     if (!state.settings.sound) return null;
-    if (!state.audioCtx) {
+    if (!state.audioEngine) {
       const AudioCtx = global.AudioContext || global.webkitAudioContext;
       if (!AudioCtx) return null;
-      state.audioCtx = new AudioCtx();
+      const ctx = new AudioCtx();
+
+      const oscPrimary = ctx.createOscillator();
+      const oscSub = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const masterGain = ctx.createGain();
+
+      oscPrimary.type = "triangle";
+      oscSub.type = "sawtooth";
+      oscPrimary.frequency.value = CONFIG.audio.engineIdleFreq;
+      oscSub.frequency.value = CONFIG.audio.engineIdleFreq * 0.5;
+
+      const subGain = ctx.createGain();
+      subGain.gain.value = 0.35;
+
+      filter.type = "lowpass";
+      filter.frequency.value = 180;
+      filter.Q.value = 2.4;
+
+      masterGain.gain.value = 0.0001;
+
+      oscPrimary.connect(filter);
+      oscSub.connect(subGain);
+      subGain.connect(filter);
+      filter.connect(masterGain);
+      masterGain.connect(ctx.destination);
+
+      const bufferSize = ctx.sampleRate * 1;
+      const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const output = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+      const noiseSource = ctx.createBufferSource();
+      noiseSource.buffer = noiseBuffer;
+      noiseSource.loop = true;
+
+      const screechFilter = ctx.createBiquadFilter();
+      screechFilter.type = "bandpass";
+      screechFilter.frequency.value = 1350;
+      screechFilter.Q.value = 6.5;
+
+      const screechGain = ctx.createGain();
+      screechGain.gain.value = 0.0001;
+
+      noiseSource.connect(screechFilter);
+      screechFilter.connect(screechGain);
+      screechGain.connect(ctx.destination);
+
+      oscPrimary.start();
+      oscSub.start();
+      noiseSource.start();
+
+      state.audioEngine = {
+        ctx,
+        oscPrimary,
+        oscSub,
+        filter,
+        masterGain,
+        screechGain,
+        screechFilter
+      };
     }
-    if (state.audioCtx.state === "suspended") {
-      state.audioCtx.resume().catch(() => {});
+
+    if (state.audioEngine.ctx.state === "suspended") {
+      state.audioEngine.ctx.resume().catch(() => {});
     }
-    return state.audioCtx;
+    return state.audioEngine;
   }
 
-  function playTone(baseFreq, durationSec, baseGain, type) {
+  function updateEngineSound(car, isActive) {
+    if (!state.settings.sound || !isActive || !car || car.phase !== "driving") {
+      if (state.audioEngine) {
+        const t = state.audioEngine.ctx.currentTime;
+        state.audioEngine.masterGain.gain.setTargetAtTime(0.0001, t, 0.06);
+        state.audioEngine.screechGain.gain.setTargetAtTime(0.0001, t, 0.04);
+      }
+      return;
+    }
+
+    const eng = initContinuousAudio();
+    if (!eng) return;
+
+    const t = eng.ctx.currentTime;
+    const speedRatio = Math.max(0, Math.min(1, car.speed / CONFIG.physics.maxSpeed));
+    const accelBoost = (car.accelLoad || 0) * 18;
+    const baseFreq = CONFIG.audio.engineIdleFreq + speedRatio * (CONFIG.audio.engineMaxFreq - CONFIG.audio.engineIdleFreq) + accelBoost;
+    const organicFreq = jitter(baseFreq, 0.025);
+
+    eng.oscPrimary.frequency.setTargetAtTime(organicFreq, t, 0.045);
+    eng.oscSub.frequency.setTargetAtTime(organicFreq * 0.5, t, 0.045);
+
+    const cutoff = 140 + speedRatio * 560 + (car.accelLoad || 0) * 380;
+    eng.filter.frequency.setTargetAtTime(cutoff, t, 0.05);
+
+    const targetGain = car.speed < 4
+      ? 0.006
+      : CONFIG.audio.engineMasterGain * (0.45 + speedRatio * 0.55 + (car.accelLoad || 0) * 0.25);
+    eng.masterGain.gain.setTargetAtTime(targetGain, t, 0.05);
+
+    const slipScreech = Math.max(
+      car.brakeLoad || 0,
+      car.gripLoadRatio > 0.82 ? (car.gripLoadRatio - 0.82) / 0.18 : 0
+    );
+    if (slipScreech > 0.08 && car.speed > 45) {
+      eng.screechFilter.frequency.setTargetAtTime(jitter(1280 + speedRatio * 420, 0.06), t, 0.03);
+      eng.screechGain.gain.setTargetAtTime(Math.min(0.032, slipScreech * 0.03), t, 0.03);
+    } else {
+      eng.screechGain.gain.setTargetAtTime(0.0001, t, 0.04);
+    }
+  }
+
+  function playOneShotTone(baseFreq, endFreq, durationSec, baseGain, type) {
     if (!state.settings.sound) return;
-    const nowMs = performance.now();
-    if (nowMs - state.lastEngineSoundMs < CONFIG.audio.soundCooldownMs) return;
-    state.lastEngineSoundMs = nowMs;
+    const eng = initContinuousAudio();
+    if (!eng) return;
 
-    const ctx = ensureAudioContext();
-    if (!ctx) return;
-
-    const freq = Math.max(24, jitter(baseFreq, 0.07));
-    const dur = Math.max(0.025, jitter(durationSec, 0.16));
-    const gainPeak = Math.max(0.005, jitter(baseGain, 0.15));
-    const attackSec = Math.max(0.004, jitter(0.014, 0.15));
+    const ctx = eng.ctx;
+    const freq0 = Math.max(24, jitter(baseFreq, 0.07));
+    const freq1 = Math.max(22, jitter(endFreq, 0.07));
+    const dur = Math.max(0.04, jitter(durationSec, 0.16));
+    const peak = Math.max(0.01, jitter(baseGain, 0.15));
 
     const t0 = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-
     osc.type = type || "triangle";
-    osc.frequency.setValueAtTime(freq, t0);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(22, freq * 1.12), t0 + dur);
+    osc.frequency.setValueAtTime(freq0, t0);
+    osc.frequency.exponentialRampToValueAtTime(freq1, t0 + dur);
 
     gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.linearRampToValueAtTime(gainPeak, t0 + attackSec);
+    gain.gain.linearRampToValueAtTime(peak, t0 + 0.015);
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
-
     osc.start(t0);
     osc.stop(t0 + dur + 0.01);
   }
 
-  function playEnginePulse(speed) {
-    if (speed < 15) return;
-    const norm = Math.min(1, speed / CONFIG.physics.maxSpeed);
-    const freq = CONFIG.audio.engineBaseFreq + norm * (CONFIG.audio.engineMaxFreq - CONFIG.audio.engineBaseFreq);
-    playTone(freq, 0.075, CONFIG.audio.engineGain, "sawtooth");
-  }
-
   function playOffTrackSound() {
-    playTone(215, 0.18, 0.08, "square");
+    playOneShotTone(260, 75, 0.24, 0.085, "sawtooth");
   }
 
   function playWinSound() {
-    playTone(587.33, 0.18, 0.075, "triangle");
+    playOneShotTone(523.25, 783.99, 0.22, 0.08, "triangle");
   }
 
   async function triggerHaptic(styleName) {
@@ -263,6 +354,28 @@
     return newlyUnlocked;
   }
 
+  function unlockNextBonusStep() {
+    const allRewards = [
+      ...CONFIG.themes.map((t) => ({ type: "theme", id: t.id, req: t.requiredWins })),
+      ...CONFIG.carStyles.map((c) => ({ type: "car", id: c.id, req: c.requiredWins }))
+    ].sort((a, b) => a.req - b.req);
+
+    for (const item of allRewards) {
+      if (item.type === "theme" && !state.profile.unlockedThemes.includes(item.id)) {
+        state.profile.unlockedThemes.push(item.id);
+        state.profile.wins = Math.max(state.profile.wins, item.req);
+        return true;
+      }
+      if (item.type === "car" && !state.profile.unlockedCars.includes(item.id)) {
+        state.profile.unlockedCars.push(item.id);
+        state.profile.wins = Math.max(state.profile.wins, item.req);
+        return true;
+      }
+    }
+    state.profile.wins += 1;
+    return false;
+  }
+
   function setStatus(key, tone, durationMs) {
     state.statusMessageKey = key;
     state.statusTone = tone || "default";
@@ -287,7 +400,7 @@
       dom.statusActionSlot.innerHTML = `<button id="btnRandomTrack" class="action-pill-btn" type="button">${getText(state.lang, "btnRandomTrack")}</button>`;
       document.getElementById("btnRandomTrack").addEventListener("click", () => {
         if (performance.now() < state.suppressClickUntil) return;
-        ensureAudioContext();
+        initContinuousAudio();
         const rect = dom.boardCard.getBoundingClientRect();
         state.rawPoints = Engine.generateRandomStroke(rect.width, rect.height);
         finalizeTrackFromStroke();
@@ -296,7 +409,7 @@
       dom.statusActionSlot.innerHTML = `<button id="btnStartRace" class="action-pill-btn start-race" type="button">${getText(state.lang, "btnStartRace")}</button>`;
       document.getElementById("btnStartRace").addEventListener("click", () => {
         if (performance.now() < state.suppressClickUntil) return;
-        ensureAudioContext();
+        initContinuousAudio();
         startManualRace();
       });
     } else {
@@ -390,18 +503,21 @@
       state.car.x = pt.x;
       state.car.y = pt.y;
       state.car.angle = Math.atan2(pt.ty, pt.tx);
+      state.car.sampleIndex = pt.sampleIndex;
 
       state.ghostCar.s = prevGhostRatio * state.track.totalLength;
       const gpt = Engine.sampleAtDistance(state.track, state.ghostCar.s);
       state.ghostCar.x = gpt.x;
       state.ghostCar.y = gpt.y;
       state.ghostCar.angle = Math.atan2(gpt.ty, gpt.tx);
+      state.ghostCar.sampleIndex = gpt.sampleIndex;
     }
   }
 
   function getStyles() {
     const cs = global.getComputedStyle(document.body);
     return {
+      cardBg: cs.getPropertyValue("--card").trim(),
       trackBed: cs.getPropertyValue("--track-bed").trim(),
       trackRail: cs.getPropertyValue("--track-rail").trim(),
       trackUnder: cs.getPropertyValue("--track-under").trim(),
@@ -452,10 +568,60 @@
     ctx.restore();
   }
 
-  function drawTrack(ctx, styles) {
+  function isSampleUnderBridge(track, sampleIdx) {
+    if (!track || !track.crossings || track.crossings.length === 0) return false;
+    const n = track.samples.length;
+    const span = 12;
+    for (const cr of track.crossings) {
+      let diff = Math.abs(sampleIdx - cr.underIndex);
+      if (diff > n * 0.5) diff = n - diff;
+      if (diff <= span) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function drawBridgeOverpassSegment(ctx, track, cr, styles) {
+    const pts = track.samples;
+    const n = pts.length;
+    const halfSpan = 14;
+
+    ctx.save();
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "round";
+
+    ctx.beginPath();
+    for (let k = -halfSpan; k <= halfSpan; k++) {
+      const idx = (cr.overIndex + k + n) % n;
+      const p = pts[idx];
+      if (k === -halfSpan) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    }
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.34)";
+    ctx.lineWidth = 28;
+    ctx.stroke();
+
+    ctx.strokeStyle = styles.cardBg;
+    ctx.lineWidth = 25;
+    ctx.stroke();
+
+    ctx.strokeStyle = styles.trackBed;
+    ctx.lineWidth = 21;
+    ctx.stroke();
+
+    ctx.strokeStyle = styles.trackOver;
+    ctx.lineWidth = 9;
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawTrackBase(ctx, styles) {
     const track = state.track;
     if (!track || !track.samples || track.samples.length < 2) return;
     const pts = track.samples;
+    const isTournament = state.profile.selectedTheme === "tournament";
 
     ctx.save();
     ctx.lineCap = "round";
@@ -471,6 +637,30 @@
     ctx.strokeStyle = styles.trackBed;
     ctx.lineWidth = 22;
     ctx.stroke();
+
+    if (isTournament) {
+      for (let i = 0; i < pts.length; i += 2) {
+        const p0 = pts[i];
+        const p1 = pts[(i + 1) % pts.length];
+        if (p0.dangerRatio > 0.32) {
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
+          ctx.strokeStyle = Math.floor(i / 2) % 2 === 0 ? "#ef4444" : "#ffffff";
+          ctx.lineWidth = 24;
+          ctx.stroke();
+        }
+      }
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = "#334155";
+      ctx.lineWidth = 17;
+      ctx.stroke();
+    }
 
     ctx.strokeStyle = styles.trackRail;
     ctx.lineWidth = 9;
@@ -491,22 +681,6 @@
       }
     }
 
-    for (const cr of track.crossings) {
-      const underPt = pts[cr.underIndex];
-      const overPt = pts[cr.overIndex];
-      if (!underPt || !overPt) continue;
-
-      ctx.beginPath();
-      ctx.arc(underPt.x, underPt.y, 11, 0, Math.PI * 2);
-      ctx.fillStyle = styles.trackUnder;
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(overPt.x, overPt.y, 6.5, 0, Math.PI * 2);
-      ctx.fillStyle = styles.trackOver;
-      ctx.fill();
-    }
-
     const startPt = pts[0];
     ctx.beginPath();
     ctx.arc(startPt.x, startPt.y, 11, 0, Math.PI * 2);
@@ -517,6 +691,14 @@
     ctx.stroke();
 
     ctx.restore();
+  }
+
+  function drawAllBridges(ctx, styles) {
+    const track = state.track;
+    if (!track || !track.crossings) return;
+    for (const cr of track.crossings) {
+      drawBridgeOverpassSegment(ctx, track, cr, styles);
+    }
   }
 
   function drawCarEntity(ctx, carObj, fillColor, isGhost) {
@@ -610,14 +792,43 @@
 
     if (state.phase === "drawing") {
       drawDrawingStroke(dom.ctx, styles);
-    } else if (state.phase === "demo") {
-      drawTrack(dom.ctx, styles);
-      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
-    } else if (state.phase === "racing") {
-      drawTrack(dom.ctx, styles);
+      return;
+    }
+
+    drawTrackBase(dom.ctx, styles);
+
+    if (state.phase === "demo") {
+      const carUnder = state.car.phase === "driving" && isSampleUnderBridge(state.track, state.car.sampleIndex);
+      if (carUnder) {
+        drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+        drawAllBridges(dom.ctx, styles);
+      } else {
+        drawAllBridges(dom.ctx, styles);
+        drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      }
+      return;
+    }
+
+    if (state.phase === "racing") {
       updateAndDrawSparks(dom.ctx, dt || 0.016);
-      drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
-      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      const ghostUnder = isSampleUnderBridge(state.track, state.ghostCar.sampleIndex);
+      const playerUnder = state.car.phase === "driving" && isSampleUnderBridge(state.track, state.car.sampleIndex);
+
+      if (ghostUnder) {
+        drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
+      }
+      if (playerUnder) {
+        drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      }
+
+      drawAllBridges(dom.ctx, styles);
+
+      if (!ghostUnder) {
+        drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
+      }
+      if (!playerUnder) {
+        drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      }
     }
   }
 
@@ -775,7 +986,7 @@
       return `<svg width="22" height="22" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="4" fill="#065f46" stroke="#fbbf24" stroke-width="2.5"/><rect x="8" y="9" width="8" height="6" rx="1.5" fill="#ecfdf5"/></svg>`;
     }
     if (id === "tournament") {
-      return `<svg width="22" height="22" viewBox="0 0 24 24"><circle cx="8.5" cy="8.5" r="3" fill="#2563eb"/><circle cx="15.5" cy="8.5" r="3" fill="#16a34a"/><circle cx="8.5" cy="15.5" r="3" fill="#d97706"/><circle cx="15.5" cy="15.5" r="3" fill="#e11d48"/></svg>`;
+      return `<svg width="22" height="22" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="4" fill="#1e293b" stroke="#ef4444" stroke-width="2.5"/><line x1="6" y1="12" x2="18" y2="12" stroke="#ffffff" stroke-width="2" stroke-dasharray="3 2"/></svg>`;
     }
     if (id === "royal") {
       return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18h18M4 15l2-9 6 5 6-5 2 9H4z"/></svg>`;
@@ -871,7 +1082,7 @@
     });
 
     dom.canvas.addEventListener("pointerdown", (ev) => {
-      ensureAudioContext();
+      initContinuousAudio();
 
       if (state.phase === "drawing") {
         if (state.drawingPointerId !== null) return;
@@ -1022,21 +1233,21 @@
     dom.modalCard.innerHTML = `
       <h2 class="modal-title" id="settingsModalTitle">${getText(state.lang, "settingsTitle")}</h2>
 
-      <div class="stats-grid-4" id="settingsStatsBox">
+      <div class="stats-grid-4">
         <div>
-          <div class="stat-cell-lbl">${getText(state.lang, "statWins")}</div>
+          <div class="stat-cell-lbl stats-reset-trigger">${getText(state.lang, "statWins")}</div>
           <div class="stat-cell-val">${state.profile.wins}</div>
         </div>
         <div>
-          <div class="stat-cell-lbl">👑 ${getText(state.lang, "statMaster")}</div>
+          <div class="stat-cell-lbl stats-reset-trigger">👑 ${getText(state.lang, "statMaster")}</div>
           <div class="stat-cell-val gold">${state.profile.masterWins}</div>
         </div>
         <div>
-          <div class="stat-cell-lbl">${getText(state.lang, "statLaps")}</div>
+          <div class="stat-cell-lbl stats-reset-trigger">${getText(state.lang, "statLaps")}</div>
           <div class="stat-cell-val">${state.profile.totalLaps}</div>
         </div>
         <div>
-          <div class="stat-cell-lbl">${getText(state.lang, "statTracks")}</div>
+          <div class="stat-cell-lbl stats-reset-trigger">${getText(state.lang, "statTracks")}</div>
           <div class="stat-cell-val">${state.profile.tracksBuilt}</div>
         </div>
       </div>
@@ -1095,30 +1306,36 @@
       titleTapCount += 1;
       if (titleTapCount >= 5) {
         titleTapCount = 0;
-        closeModal();
-        triggerWinFlow(true);
-      }
-    });
-
-    document.getElementById("settingsStatsBox").addEventListener("click", () => {
-      statsTapCount += 1;
-      if (statsTapCount >= 5) {
-        statsTapCount = 0;
-        state.profile.wins = 0;
-        state.profile.masterWins = 0;
-        state.profile.totalLaps = 0;
-        state.profile.totalExits = 0;
-        state.profile.tracksBuilt = 0;
-        state.profile.unlockedThemes = ["classic"];
-        state.profile.selectedTheme = "classic";
-        state.profile.unlockedCars = ["classic_car", "formula"];
-        state.profile.selectedCar = "classic_car";
-        applyTheme();
+        unlockNextBonusStep();
+        triggerHaptic("light");
         updateHud();
         persistProfile();
         openSettingsModal();
       }
     });
+
+    for (const lbl of dom.modalCard.querySelectorAll(".stats-reset-trigger")) {
+      lbl.addEventListener("click", () => {
+        statsTapCount += 1;
+        if (statsTapCount >= 5) {
+          statsTapCount = 0;
+          state.profile.wins = 0;
+          state.profile.masterWins = 0;
+          state.profile.totalLaps = 0;
+          state.profile.totalExits = 0;
+          state.profile.tracksBuilt = 0;
+          state.profile.unlockedThemes = ["classic"];
+          state.profile.selectedTheme = "classic";
+          state.profile.unlockedCars = ["classic_car", "formula"];
+          state.profile.selectedCar = "classic_car";
+          applyTheme();
+          updateHud();
+          renderCanvas(0.016);
+          persistProfile();
+          openSettingsModal();
+        }
+      });
+    }
 
     for (const btn of dom.modalCard.querySelectorAll("[data-lang]")) {
       btn.addEventListener("click", () => {
@@ -1133,7 +1350,7 @@
 
     document.getElementById("btnToggleSound").addEventListener("click", () => {
       state.settings.sound = !state.settings.sound;
-      if (state.settings.sound) ensureAudioContext();
+      if (state.settings.sound) initContinuousAudio();
       persistProfile();
       openSettingsModal();
     });
@@ -1252,6 +1469,7 @@
       state.profile.masterWins += 1;
     }
     const unlockedItems = refreshUnlocks();
+    updateEngineSound(null, false);
     playWinSound();
     triggerHaptic("light");
     updateHud();
@@ -1346,20 +1564,36 @@
     const dt = Math.min(0.05, (now - state.lastFrameTime) / 1000);
     state.lastFrameTime = now;
 
-    if ((state.phase === "demo" || state.phase === "racing") && state.track && !dom.modalBackdrop.classList.contains("open")) {
+    const modalOpen = dom.modalBackdrop.classList.contains("open");
+
+    if ((state.phase === "demo" || state.phase === "racing") && state.track && !modalOpen) {
       if (state.phase === "demo") {
         Engine.stepCar(state.car, state.track, "auto", dt, state.profile.selectedCar, null);
-        playEnginePulse(state.car.speed);
+        updateEngineSound(state.car, true);
         updateHud();
         renderCanvas(dt);
       } else if (state.phase === "racing") {
         state.raceElapsedSec += dt;
-        Engine.stepCar(state.ghostCar, state.track, "auto", dt, "classic_car", null);
+        Engine.stepCar(state.ghostCar, state.track, "auto", dt, "classic_car", {
+          onLapCompleted: (ghostLaps) => {
+            if (ghostLaps >= state.settings.lapsToWin) {
+              state.ghostCar.finished = true;
+              state.ghostCar.s = 0;
+              state.ghostCar.lapProgress = 0;
+              const startPt = Engine.sampleAtDistance(state.track, 0);
+              state.ghostCar.x = startPt.x;
+              state.ghostCar.y = startPt.y;
+              state.ghostCar.angle = Math.atan2(startPt.ty, startPt.tx);
+              state.ghostCar.sampleIndex = 0;
+            }
+          }
+        });
 
-        const res = Engine.stepCar(state.car, state.track, "manual", dt, state.profile.selectedCar, {
+        Engine.stepCar(state.car, state.track, "manual", dt, state.profile.selectedCar, {
           onOffTrack: () => {
             state.hasMoves = true;
             state.profile.totalExits += 1;
+            updateEngineSound(null, false);
             playOffTrackSound();
             triggerHaptic("heavy");
             setStatus("statusOffTrack", "error", 1600);
@@ -1386,13 +1620,12 @@
           triggerHaptic("light");
         }
 
-        if (res && res.event !== "off_track" && state.car.phase === "driving") {
-          playEnginePulse(state.car.speed);
-        }
-
+        updateEngineSound(state.car, true);
         updateHud();
         renderCanvas(dt);
       }
+    } else {
+      updateEngineSound(null, false);
     }
 
     global.requestAnimationFrame(gameLoop);
@@ -1446,12 +1679,14 @@
         state.car.x = pt.x;
         state.car.y = pt.y;
         state.car.angle = Math.atan2(pt.ty, pt.tx);
+        state.car.sampleIndex = pt.sampleIndex;
 
         state.ghostCar = Object.assign(Engine.createCarState(), savedSession.ghostCar || {});
         const gpt = Engine.sampleAtDistance(state.track, state.ghostCar.s);
         state.ghostCar.x = gpt.x;
         state.ghostCar.y = gpt.y;
         state.ghostCar.angle = Math.atan2(gpt.ty, gpt.tx);
+        state.ghostCar.sampleIndex = gpt.sampleIndex;
 
         renderStatusActionSlot();
         renderStatus();
