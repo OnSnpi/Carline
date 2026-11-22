@@ -278,6 +278,77 @@
     return crossings;
   }
 
+  function findBestStartShift(samples, crossings) {
+    const n = samples.length;
+    if (n === 0 || !crossings || crossings.length === 0) return 0;
+
+    const clearance = Math.max(22, Math.floor(n * 0.065));
+
+    function circularDist(a, b) {
+      const d = Math.abs(a - b);
+      return Math.min(d, n - d);
+    }
+
+    function isNearAnyCrossing(idx, minGap) {
+      for (const cr of crossings) {
+        if (circularDist(idx, cr.underIndex) <= minGap) return true;
+        if (circularDist(idx, cr.overIndex) <= minGap) return true;
+      }
+      return false;
+    }
+
+    if (!isNearAnyCrossing(0, clearance)) {
+      return 0;
+    }
+
+    let bestIdx = 0;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < n; i++) {
+      let minCrDist = n;
+      for (const cr of crossings) {
+        const d1 = circularDist(i, cr.underIndex);
+        const d2 = circularDist(i, cr.overIndex);
+        if (d1 < minCrDist) minCrDist = d1;
+        if (d2 < minCrDist) minCrDist = d2;
+      }
+      const straightBonus = (1 - samples[i].dangerRatio) * 18;
+      const score = Math.min(minCrDist, clearance * 1.5) + straightBonus;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+
+    return bestIdx;
+  }
+
+  function rotateSamplesStart(samples, totalLength, shiftIdx) {
+    const n = samples.length;
+    if (n === 0 || !shiftIdx || shiftIdx <= 0 || shiftIdx >= n) {
+      return samples;
+    }
+    const stepLen = totalLength / n;
+    const rotated = [];
+    for (let k = 0; k < n; k++) {
+      const src = samples[(shiftIdx + k) % n];
+      rotated.push({
+        index: k,
+        s: k * stepLen,
+        tNorm: k / n,
+        x: src.x,
+        y: src.y,
+        tx: src.tx,
+        ty: src.ty,
+        signedCurvature: src.signedCurvature,
+        curvature: src.curvature,
+        maxSafeSpeed: src.maxSafeSpeed,
+        dangerRatio: src.dangerRatio
+      });
+    }
+    return rotated;
+  }
+
   function getSpec(carStyleId) {
     return carSpecs[carStyleId] || carSpecs.classic_car;
   }
@@ -333,11 +404,18 @@
         drawing.canvasPadding
       );
       const resampled = resampleClosedLoop(fitted, drawing.sampleCount, grip);
-      const crossings = detectCrossings(resampled.samples);
+      const initialCrossings = detectCrossings(resampled.samples);
+      const shiftIdx = findBestStartShift(resampled.samples, initialCrossings);
+      const finalSamples = rotateSamplesStart(
+        resampled.samples,
+        resampled.totalLength,
+        shiftIdx
+      );
+      const crossings = detectCrossings(finalSamples);
 
       const track = {
         loopPoints: fitted,
-        samples: resampled.samples,
+        samples: finalSamples,
         totalLength: resampled.totalLength,
         crossings,
         magnetGrip: grip,
