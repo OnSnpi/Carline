@@ -30,7 +30,7 @@
       --success-text: #15803d;
       --track-bed: #e2e8f0;
       --track-rail: #1e293b;
-      --track-under: #64748b;
+      --track-under: #94a3b8;
       --track-over: #0f172a;
       --start-color: #16a34a;
       --car-color: #e11d48;
@@ -64,7 +64,7 @@
       --success-text: #6ee7b7;
       --track-bed: #047857;
       --track-rail: #fde68a;
-      --track-under: #10b981;
+      --track-under: #059669;
       --track-over: #fbbf24;
       --start-color: #34d399;
       --car-color: #fbbf24;
@@ -72,25 +72,34 @@
     }
 
     body[data-theme="tournament"] {
-      --bg: #eef2ff;
-      --card: #ffffff;
-      --border: #c7d2fe;
-      --wall: #1d4ed8;
-      --text: #1e1b4b;
-      --text-muted: #4338ca;
-      --accent: #7c3aed;
-      --accent-dark: #6d28d9;
-      --accent-soft: #f5f3ff;
+      --bg: #334155;
+      --card: #1e293b;
+      --border: #475569;
+      --wall: #ef4444;
+      --text: #f8fafc;
+      --text-muted: #cbd5e1;
+      --accent: #ef4444;
+      --accent-dark: #dc2626;
+      --accent-soft: #334155;
       --accent-text: #ffffff;
-      --status-bg: #e0e7ff;
-      --status-text: #3730a3;
-      --track-bed: #dbeafe;
-      --track-rail: #1d4ed8;
-      --track-under: #0891b2;
-      --track-over: #7c3aed;
-      --start-color: #16a34a;
-      --car-color: #e11d48;
-      --ghost-color: rgba(124, 58, 237, 0.38);
+      --status-bg: #0f172a;
+      --status-text: #f8fafc;
+      --trial-bg: #451a03;
+      --trial-border: #f59e0b;
+      --trial-text: #fde68a;
+      --error-bg: #450a0a;
+      --error-border: #f87171;
+      --error-text: #fecaca;
+      --success-bg: #022c22;
+      --success-border: #34d399;
+      --success-text: #6ee7b7;
+      --track-bed: #475569;
+      --track-rail: #f8fafc;
+      --track-under: #334155;
+      --track-over: #ffffff;
+      --start-color: #22c55e;
+      --car-color: #ef4444;
+      --ghost-color: rgba(56, 189, 248, 0.45);
     }
 
     body[data-theme="royal"] {
@@ -117,7 +126,7 @@
       --success-text: #a7f3d0;
       --track-bed: #1e293b;
       --track-rail: #e2e8f0;
-      --track-under: #f472b6;
+      --track-under: #475569;
       --track-over: #fbbf24;
       --start-color: #34d399;
       --car-color: #fb7185;
@@ -502,6 +511,7 @@
     }
 
     body[data-theme="emerald"] .choice-btn.active,
+    body[data-theme="tournament"] .choice-btn.active,
     body[data-theme="royal"] .choice-btn.active {
       color: var(--accent);
     }
@@ -572,6 +582,7 @@
     }
 
     body[data-theme="emerald"] .visual-tile.active .tile-name,
+    body[data-theme="tournament"] .visual-tile.active .tile-name,
     body[data-theme="royal"] .visual-tile.active .tile-name {
       color: var(--accent);
     }
