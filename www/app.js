@@ -749,12 +749,58 @@
       ctx.fill();
       ctx.stroke();
     } else if (carStyle === "prototype") {
+      // Aerodynamický Le Mans klín se zúženou přídí, kapkovitou kabinou a zadním křídlem
       ctx.beginPath();
-      ctx.roundRect(-12, -7.5, 24, 15, 6);
+      ctx.moveTo(14.5, 0);
+      ctx.quadraticCurveTo(8, -6.5, -10, -7.5);
+      ctx.lineTo(-13, -8.5);
+      ctx.lineTo(-13, 8.5);
+      ctx.lineTo(-10, 7.5);
+      ctx.quadraticCurveTo(8, 6.5, 14.5, 0);
+      ctx.closePath();
       ctx.fill();
       ctx.stroke();
+
+      // Zadní přítlačné křídlo
       ctx.fillStyle = "#ffffff";
-      ctx.fillRect(3, -4, 5, 8);
+      ctx.fillRect(-13.5, -8, 2.8, 16);
+
+      // Středová kapkovitá kabina
+      ctx.beginPath();
+      ctx.ellipse(1.5, 0, 4.5, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (carStyle === "bus") {
+      // Prodloužený autobus s panoramatickým čelním sklem a střešními okny
+      ctx.beginPath();
+      ctx.roundRect(-14.5, -7.5, 29, 15, 3.5);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(8.5, -5.2, 3.8, 10.4);
+      ctx.fillRect(-10, -4.2, 4.5, 8.4);
+      ctx.fillRect(-2.5, -4.2, 4.5, 8.4);
+    } else if (carStyle === "truck") {
+      // Návěs vzadu
+      ctx.beginPath();
+      ctx.roundRect(-16.5, -7.5, 19, 15, 2.5);
+      ctx.fill();
+      ctx.stroke();
+
+      // Závěs / točna
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(2.5, -2.5, 2.5, 5);
+
+      // Přední kabina tahače
+      ctx.fillStyle = fillColor;
+      ctx.beginPath();
+      ctx.roundRect(4.5, -7, 9.5, 14, 3);
+      ctx.fill();
+      ctx.stroke();
+
+      // Čelní sklo tahače
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(10, -4.8, 2.8, 9.6);
     } else {
       ctx.beginPath();
       ctx.roundRect(-11, -7, 22, 14, 4);
@@ -1013,7 +1059,13 @@
       return `<svg width="26" height="22" viewBox="0 0 28 22"><polygon points="24,11 5,4 8,11 5,18" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/></svg>`;
     }
     if (id === "prototype") {
-      return `<svg width="26" height="22" viewBox="0 0 28 22"><rect x="3" y="5" width="22" height="12" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/><rect x="15" y="8" width="5" height="6" rx="1" fill="#ffffff"/></svg>`;
+      return `<svg width="28" height="22" viewBox="0 0 30 22"><path d="M26 11 Q19 5 5 4.5 L3 3.5 L3 18.5 L5 17.5 Q19 17 26 11 Z" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/><rect x="2.5" y="4" width="2.4" height="14" fill="#ffffff"/><ellipse cx="14.5" cy="11" rx="4" ry="2.6" fill="#ffffff"/></svg>`;
+    }
+    if (id === "bus") {
+      return `<svg width="28" height="22" viewBox="0 0 30 22"><rect x="2.5" y="4.5" width="25" height="13" rx="3" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/><rect x="21.5" y="6.5" width="3.5" height="9" rx="0.8" fill="#ffffff"/><rect x="6" y="7" width="4" height="8" rx="0.8" fill="#ffffff"/><rect x="12.5" y="7" width="4" height="8" rx="0.8" fill="#ffffff"/></svg>`;
+    }
+    if (id === "truck") {
+      return `<svg width="30" height="22" viewBox="0 0 32 22"><rect x="2" y="4.5" width="16" height="13" rx="2" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/><rect x="18" y="8.8" width="2.5" height="4.4" fill="${stroke}"/><rect x="20" y="5" width="9.5" height="12" rx="2.5" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/><rect x="25" y="7" width="2.6" height="8" rx="0.6" fill="#ffffff"/></svg>`;
     }
     if (id === "neon_dot") {
       return `<svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" fill="${fill}" stroke="${stroke}" stroke-width="1.6"/><circle cx="15" cy="12" r="2.2" fill="#ffffff"/></svg>`;
