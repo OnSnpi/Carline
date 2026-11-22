@@ -575,12 +575,15 @@
     return 1;
   }
 
-  function isCarUnderBridge(track, carObj, carStyleId) {
-    if (!track || !track.crossings || track.crossings.length === 0 || !carObj) return false;
+  function isCarUnderSpecificCrossing(track, carObj, carStyleId, cr) {
+    if (!track || !carObj || carObj.phase !== "driving" || carObj.visible === false || !cr) {
+      return false;
+    }
     const n = track.samples.length;
+    if (n === 0) return false;
+
     const sampleIdx = carObj.sampleIndex || 0;
     const lengthBonus = getCarBridgeSpanBonus(carStyleId);
-    const overPrioritySpan = 9;
     const underSpan = 10 + lengthBonus;
 
     function circularDiff(a, b) {
@@ -589,24 +592,25 @@
       return diff;
     }
 
-    for (const cr of track.crossings) {
-      if (circularDiff(sampleIdx, cr.overIndex) <= overPrioritySpan) {
-        return false;
-      }
+    const distUnder = circularDiff(sampleIdx, cr.underIndex);
+    const distOver = circularDiff(sampleIdx, cr.overIndex);
+
+    if (distOver < distUnder) {
+      return false;
     }
 
-    for (const cr of track.crossings) {
-      if (circularDiff(sampleIdx, cr.underIndex) <= underSpan) {
-        return true;
-      }
-      if (
-        typeof carObj.x === "number" &&
-        typeof carObj.y === "number" &&
-        Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 21 + lengthBonus * 2
-      ) {
-        return true;
-      }
+    if (distUnder <= underSpan) {
+      return true;
     }
+
+    if (
+      typeof carObj.x === "number" &&
+      typeof carObj.y === "number" &&
+      Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 21 + lengthBonus * 2
+    ) {
+      return true;
+    }
+
     return false;
   }
 
@@ -882,40 +886,45 @@
     drawTrackBase(dom.ctx, styles);
 
     if (state.phase === "demo") {
-      const carUnder =
-        state.car.phase === "driving" &&
-        isCarUnderBridge(state.track, state.car, state.profile.selectedCar);
-      if (carUnder) {
-        drawCarEntity(dom.ctx, state.car, styles.carColor, false);
-        drawAllBridges(dom.ctx, styles);
-      } else {
-        drawAllBridges(dom.ctx, styles);
-        drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      const crossings = (state.track && state.track.crossings) || [];
+      const bridgesOverCar = [];
+
+      for (const cr of crossings) {
+        if (isCarUnderSpecificCrossing(state.track, state.car, state.profile.selectedCar, cr)) {
+          bridgesOverCar.push(cr);
+        } else {
+          drawBridgeOverpassSegment(dom.ctx, state.track, cr, styles);
+        }
+      }
+
+      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+
+      for (const cr of bridgesOverCar) {
+        drawBridgeOverpassSegment(dom.ctx, state.track, cr, styles);
       }
       return;
     }
 
     if (state.phase === "racing") {
       updateAndDrawSparks(dom.ctx, dt || 0.016);
-      const ghostUnder = isCarUnderBridge(state.track, state.ghostCar, "classic_car");
-      const playerUnder =
-        state.car.phase === "driving" &&
-        isCarUnderBridge(state.track, state.car, state.profile.selectedCar);
+      const crossings = (state.track && state.track.crossings) || [];
+      const bridgesAfterCars = [];
 
-      if (ghostUnder) {
-        drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
-      }
-      if (playerUnder) {
-        drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      for (const cr of crossings) {
+        const underGhost = isCarUnderSpecificCrossing(state.track, state.ghostCar, "classic_car", cr);
+        const underPlayer = isCarUnderSpecificCrossing(state.track, state.car, state.profile.selectedCar, cr);
+        if (underGhost || underPlayer) {
+          bridgesAfterCars.push(cr);
+        } else {
+          drawBridgeOverpassSegment(dom.ctx, state.track, cr, styles);
+        }
       }
 
-      drawAllBridges(dom.ctx, styles);
+      drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
+      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
 
-      if (!ghostUnder) {
-        drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
-      }
-      if (!playerUnder) {
-        drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      for (const cr of bridgesAfterCars) {
+        drawBridgeOverpassSegment(dom.ctx, state.track, cr, styles);
       }
     }
   }
