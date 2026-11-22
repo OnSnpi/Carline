@@ -20,8 +20,62 @@
     return len;
   }
 
+  function closeStrokeSmoothly(pts) {
+    const cleaned = [];
+    for (const p of pts) {
+      if (cleaned.length === 0 || dist(cleaned[cleaned.length - 1], p) >= 3) {
+        cleaned.push({ x: p.x, y: p.y });
+      }
+    }
+    if (cleaned.length < 4) return cleaned;
+
+    while (cleaned.length > 6 && dist(cleaned[cleaned.length - 1], cleaned[0]) < 14) {
+      cleaned.pop();
+    }
+
+    const n = cleaned.length;
+    const pLast = cleaned[n - 1];
+    const pPrev = cleaned[n - 2];
+    const pFirst = cleaned[0];
+    const pNext = cleaned[1];
+
+    const gap = dist(pLast, pFirst);
+    if (gap <= 10) {
+      return cleaned;
+    }
+
+    const tangentScale = Math.min(gap * 0.45, 70);
+    const outLen = dist(pPrev, pLast) || 1;
+    const inLen = dist(pFirst, pNext) || 1;
+
+    const m0x = ((pLast.x - pPrev.x) / outLen) * tangentScale;
+    const m0y = ((pLast.y - pPrev.y) / outLen) * tangentScale;
+    const m1x = ((pNext.x - pFirst.x) / inLen) * tangentScale;
+    const m1y = ((pNext.y - pFirst.y) / inLen) * tangentScale;
+
+    const bridgeSteps = Math.max(3, Math.min(18, Math.round(gap / 10)));
+    const result = cleaned.slice();
+
+    for (let step = 1; step < bridgeSteps; step++) {
+      const t = step / bridgeSteps;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const h00 = 2 * t3 - 3 * t2 + 1;
+      const h10 = t3 - 2 * t2 + t;
+      const h01 = -2 * t3 + 3 * t2;
+      const h11 = t3 - t2;
+
+      result.push({
+        x: h00 * pLast.x + h10 * m0x + h01 * pFirst.x + h11 * m1x,
+        y: h00 * pLast.y + h10 * m0y + h01 * pFirst.y + h11 * m1y
+      });
+    }
+
+    return result;
+  }
+
   function smoothClosedLoop(pts, iterations) {
-    let ring = pts.map((p) => ({ x: p.x, y: p.y }));
+    let ring = closeStrokeSmoothly(pts);
     if (ring.length < 3) return ring;
 
     for (let iter = 0; iter < iterations; iter++) {
@@ -122,9 +176,9 @@
     const signedCurvs = new Array(m).fill(0);
 
     for (let i = 0; i < m; i++) {
-      const prev = samples[(i - 3 + m) % m];
+      const prev = samples[(i - 4 + m) % m];
       const curr = samples[i];
-      const next = samples[(i + 3) % m];
+      const next = samples[(i + 4) % m];
 
       const dx = next.x - prev.x;
       const dy = next.y - prev.y;
@@ -139,17 +193,19 @@
       const l1 = Math.hypot(v1x, v1y) || 1;
       const l2 = Math.hypot(v2x, v2y) || 1;
       const crossSigned = (v1x * v2y - v1y * v2x) / (l1 * l2);
-      const chord = Math.max(10, (l1 + l2) * 0.5);
-      signedCurvs[i] = Math.max(-0.032, Math.min(0.032, crossSigned / chord));
+      const chord = Math.max(12, (l1 + l2) * 0.5);
+      signedCurvs[i] = Math.max(-0.03, Math.min(0.03, crossSigned / chord));
       rawCurvs[i] = Math.abs(signedCurvs[i]);
     }
 
     const grip = magnetGrip || physics.magnetGripBase;
     for (let i = 0; i < m; i++) {
-      const cPrev = rawCurvs[(i - 1 + m) % m];
-      const cCurr = rawCurvs[i];
-      const cNext = rawCurvs[(i + 1) % m];
-      const smoothCurv = 0.25 * cPrev + 0.5 * cCurr + 0.25 * cNext;
+      const c2 = rawCurvs[(i - 2 + m) % m];
+      const c1 = rawCurvs[(i - 1 + m) % m];
+      const c0 = rawCurvs[i];
+      const cn1 = rawCurvs[(i + 1) % m];
+      const cn2 = rawCurvs[(i + 2) % m];
+      const smoothCurv = 0.1 * c2 + 0.22 * c1 + 0.36 * c0 + 0.22 * cn1 + 0.1 * cn2;
       samples[i].curvature = smoothCurv;
       samples[i].signedCurvature = signedCurvs[i];
 
@@ -158,7 +214,7 @@
         : physics.maxSpeed;
       const clampedSafe = Math.max(physics.autoMinCornerSpeed, Math.min(physics.maxSpeed, safeFromMagnet));
       samples[i].maxSafeSpeed = clampedSafe;
-      samples[i].dangerRatio = Math.max(0, Math.min(1, 1 - (clampedSafe - 72) / (physics.maxSpeed - 72)));
+      samples[i].dangerRatio = Math.max(0, Math.min(1, 1 - (clampedSafe - 68) / (physics.maxSpeed - 68)));
     }
 
     return {
@@ -180,7 +236,7 @@
     const t = (qpX * sY - qpY * sX) / denom;
     const u = (qpX * rY - qpY * rX) / denom;
 
-    if (t > 0.05 && t < 0.95 && u > 0.05 && u < 0.95) {
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
       return {
         x: p1.x + t * rX,
         y: p1.y + t * rY,
@@ -195,7 +251,7 @@
     const n = samples.length;
     if (n < 16) return [];
     const crossings = [];
-    const minIndexGap = Math.max(10, Math.floor(n * 0.045));
+    const minIndexGap = Math.max(6, Math.floor(n * 0.02));
 
     for (let i = 0; i < n; i++) {
       const a1 = samples[i];
@@ -207,12 +263,15 @@
         const b2 = samples[(j + 1) % n];
         const hit = segmentIntersection(a1, a2, b1, b2);
         if (hit) {
-          crossings.push({
-            x: hit.x,
-            y: hit.y,
-            underIndex: i,
-            overIndex: j
-          });
+          const alreadyNear = crossings.some((c) => Math.hypot(c.x - hit.x, c.y - hit.y) < 10);
+          if (!alreadyNear) {
+            crossings.push({
+              x: hit.x,
+              y: hit.y,
+              underIndex: i,
+              overIndex: j
+            });
+          }
         }
       }
     }
@@ -295,7 +354,7 @@
       simCar.speed = 90;
       const dt = 0.025;
       let elapsed = 0;
-      const maxTime = 60;
+      const maxTime = 90;
 
       while (simCar.lapsCompleted < 1 && elapsed < maxTime) {
         Carline.Engine.stepCar(simCar, track, "auto", dt, "classic_car", null);
@@ -380,6 +439,10 @@
         offTrackCount: 0,
         gripLoadRatio: 0,
         driftAngle: 0,
+        accelLoad: 0,
+        brakeLoad: 0,
+        sampleIndex: 0,
+        finished: false,
         x: 0,
         y: 0,
         angle: 0,
@@ -393,9 +456,17 @@
         return { event: null };
       }
 
+      if (car.finished) {
+        car.speed = 0;
+        car.accelLoad = 0;
+        car.brakeLoad = 0;
+        return { event: "finished" };
+      }
+
       const clampedDt = Math.min(dt, 0.05);
       const spec = getSpec(carStyleId);
       const pt = Carline.Engine.sampleAtDistance(track, car.s);
+      car.sampleIndex = pt.sampleIndex;
 
       if (car.phase === "flying") {
         car.phaseTimer += clampedDt;
@@ -407,6 +478,8 @@
         car.driftAngle += clampedDt * 9;
         car.visible = true;
         car.gripLoadRatio = 1.2;
+        car.accelLoad = 0;
+        car.brakeLoad = 0;
 
         if (progress >= 1) {
           car.phase = "dropped";
@@ -457,6 +530,7 @@
 
       car.visible = true;
       car.scale = 1;
+      const prevSpeed = car.speed;
 
       if (mode === "auto") {
         const safeTarget = Carline.Engine.computeAutoLookaheadSpeed(track, car.s);
@@ -471,6 +545,10 @@
         const diff = car.targetSpeed - car.speed;
         car.speed += diff * Math.min(1, clampedDt * 7.5 * spec.accelMult);
       }
+
+      const dv = (car.speed - prevSpeed) / clampedDt;
+      car.accelLoad = dv > 12 ? Math.min(1, dv / 220) : 0;
+      car.brakeLoad = dv < -25 ? Math.min(1, Math.abs(dv) / 260) : 0;
 
       const effectiveSafeLimit = pt.maxSafeSpeed * Math.sqrt(spec.gripMult);
       car.gripLoadRatio = effectiveSafeLimit > 0 ? car.speed / effectiveSafeLimit : 0;
@@ -515,6 +593,7 @@
       car.x = updatedPt.x;
       car.y = updatedPt.y;
       car.angle = Math.atan2(updatedPt.ty, updatedPt.tx);
+      car.sampleIndex = updatedPt.sampleIndex;
 
       let lapEvent = null;
       if (car.lapProgress >= 1) {
