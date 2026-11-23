@@ -9,6 +9,7 @@
     profile: JSON.parse(JSON.stringify(CONFIG.defaults.profile)),
     settings: JSON.parse(JSON.stringify(CONFIG.defaults.settings)),
     phase: "drawing",
+    viewMode: "top",
     rawPoints: [],
     track: null,
     car: Engine.createCarState(),
@@ -117,6 +118,7 @@
   async function persistSession() {
     await saveStorage(CONFIG.storageKeys.session, {
       phase: state.phase,
+      viewMode: state.viewMode,
       rawPoints: state.rawPoints,
       hasMoves: state.hasMoves,
       showBrakingZones: state.showBrakingZones,
@@ -409,11 +411,25 @@
         finalizeTrackFromStroke();
       });
     } else if (state.phase === "demo") {
-      dom.statusActionSlot.innerHTML = `<button id="btnStartRace" class="action-pill-btn start-race" type="button">${getText(state.lang, "btnStartRace")}</button>`;
+      const viewLabel = state.viewMode === "cockpit"
+        ? getText(state.lang, "btnViewTop")
+        : getText(state.lang, "btnViewCockpit");
+      dom.statusActionSlot.innerHTML = `
+        <button id="btnToggleView" class="action-pill-btn" type="button">${viewLabel}</button>
+        <button id="btnStartRace" class="action-pill-btn start-race" type="button">${getText(state.lang, "btnStartRace")}</button>
+      `;
+      document.getElementById("btnToggleView").addEventListener("click", () => {
+        if (performance.now() < state.suppressClickUntil) return;
+        state.viewMode = state.viewMode === "cockpit" ? "top" : "cockpit";
+        triggerHaptic("light");
+        renderStatusActionSlot();
+        renderCanvas(0.016);
+        persistSession();
+      });
       document.getElementById("btnStartRace").addEventListener("click", () => {
         if (performance.now() < state.suppressClickUntil) return;
         initContinuousAudio();
-        startManualRace();
+        openRaceViewSelectModal();
       });
     } else {
       dom.statusActionSlot.innerHTML = `<span class="race-timer-badge" id="raceTimerBadge">${formatSec(state.raceElapsedSec)}</span>`;
@@ -905,6 +921,364 @@
     ctx.restore();
   }
 
+  function getCockpitThemePalette() {
+    const theme = state.profile.selectedTheme;
+    if (theme === "emerald") {
+      return {
+        skyTop: "#022c22",
+        skyBottom: "#065f46",
+        ground: "#064e3b",
+        road: "#047857",
+        curbA: "#fbbf24",
+        curbB: "#ecfdf5",
+        rail: "#fde68a",
+        pillar: "#022c22",
+        dash: "#022c22",
+        dashAccent: "#fbbf24"
+      };
+    }
+    if (theme === "tournament") {
+      return {
+        skyTop: "#0f172a",
+        skyBottom: "#1e293b",
+        ground: "#1e293b",
+        road: "#334155",
+        curbA: "#ef4444",
+        curbB: "#f8fafc",
+        rail: "#94a3b8",
+        pillar: "#0f172a",
+        dash: "#0f172a",
+        dashAccent: "#ef4444"
+      };
+    }
+    if (theme === "royal") {
+      return {
+        skyTop: "#090d16",
+        skyBottom: "#1e293b",
+        ground: "#0f172a",
+        road: "#1e293b",
+        curbA: "#fbbf24",
+        curbB: "#334155",
+        rail: "#fbbf24",
+        pillar: "#090d16",
+        dash: "#090d16",
+        dashAccent: "#fbbf24"
+      };
+    }
+    return {
+      skyTop: "#bae6fd",
+      skyBottom: "#e0f2fe",
+      ground: "#e2e8f0",
+      road: "#475569",
+      curbA: "#ef4444",
+      curbB: "#ffffff",
+      rail: "#cbd5e1",
+      pillar: "#334155",
+      dash: "#1e293b",
+      dashAccent: "#2563eb"
+    };
+  }
+
+  function renderCockpitView(ctx, width, height, styles) {
+    const track = state.track;
+    if (!track || !track.samples || track.samples.length === 0) return;
+
+    const pal = getCockpitThemePalette();
+    const car = state.car;
+    const totalLen = track.totalLength;
+    const n = track.samples.length;
+    const stepDist = totalLen / n;
+
+    const camPt = Engine.sampleAtDistance(track, car.s);
+    const aheadSlopePt = Engine.sampleAtDistance(track, car.s + stepDist * 3);
+    const slope = ((aheadSlopePt.z || 0) - (camPt.z || 0)) / Math.max(1, stepDist * 3);
+
+    const speedRatio = Math.max(0, Math.min(1, car.speed / CONFIG.physics.maxSpeed));
+    const turnForce = (camPt.signedCurvature || 0) * car.speed * 1.9;
+    const clampedTurn = Math.max(-1, Math.min(1, turnForce));
+    const driftVisual = car.driftAngle || 0;
+
+    let rollAngle = -clampedTurn * 0.085 - driftVisual * 0.25;
+    let pitchOffset = ((car.brakeLoad || 0) - (car.accelLoad || 0)) * 18 + slope * 420;
+    let camHeight = 14 + (camPt.z || 0) * 34;
+
+    if (car.phase === "flying") {
+      const p = Math.min(1, car.phaseTimer / CONFIG.physics.flightDurationSec);
+      camHeight += Math.sin(p * Math.PI) * 38;
+      rollAngle += Math.sin(p * Math.PI * 2) * 0.45;
+      pitchOffset -= Math.sin(p * Math.PI) * 35;
+    }
+
+    const horizonY = height * 0.44 + pitchOffset;
+    const focal = width * 0.85;
+    const halfRoadWorld = 11.5;
+    const headingAngle = Math.atan2(camPt.ty, camPt.tx) + driftVisual * 0.45;
+    const fwdX = Math.cos(headingAngle);
+    const fwdY = Math.sin(headingAngle);
+    const rightX = -fwdY;
+    const rightY = fwdX;
+
+    ctx.save();
+    ctx.translate(width * 0.5, horizonY);
+    ctx.rotate(rollAngle);
+    ctx.translate(-width * 0.5, -horizonY);
+
+    // 1. Obloha a horizont
+    const skyGrad = ctx.createLinearGradient(0, -height * 0.5, 0, horizonY);
+    skyGrad.addColorStop(0, pal.skyTop);
+    skyGrad.addColorStop(1, pal.skyBottom);
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(-width * 0.5, -height * 0.5, width * 2, horizonY + height * 0.5 + 2);
+
+    // 2. Zemina / povrch stolu pod tratí
+    ctx.fillStyle = pal.ground;
+    ctx.fillRect(-width * 0.5, horizonY, width * 2, height * 1.5);
+
+    // 3. Projekce bodů tratě před vozidlem (od nejvzdálenějšího po nejbližší)
+    const lookSteps = 105;
+    const projected = [];
+
+    function projectWorldPoint(wx, wy, wz) {
+      const dx = wx - camPt.x;
+      const dy = wy - camPt.y;
+      const forward = dx * fwdX + dy * fwdY;
+      if (forward <= 2.2) return null;
+      const lateral = dx * rightX + dy * rightY;
+      const relZ = wz * 34 - camHeight;
+      const scale = focal / forward;
+      return {
+        sx: width * 0.5 + lateral * scale,
+        sy: horizonY - relZ * scale,
+        groundSy: horizonY + camHeight * scale,
+        halfW: halfRoadWorld * scale,
+        forward,
+        scale
+      };
+    }
+
+    for (let k = 1; k <= lookSteps; k++) {
+      const distAhead = k * stepDist * 0.85;
+      const sSample = car.s + distAhead;
+      const sp = Engine.sampleAtDistance(track, sSample);
+      const proj = projectWorldPoint(sp.x, sp.y, sp.z || 0);
+      if (proj) {
+        const globalSeg = Math.floor(sSample / (stepDist * 1.7));
+        projected.push({
+          proj,
+          z: sp.z || 0,
+          dangerRatio: sp.dangerRatio || 0,
+          segIndex: globalSeg,
+          isStart: ((sSample % totalLen) + totalLen) % totalLen < stepDist * 1.4
+        });
+      }
+    }
+
+    for (let i = projected.length - 1; i >= 1; i--) {
+      const farNode = projected[i];
+      const nearNode = projected[i - 1];
+      const f = farNode.proj;
+      const nr = nearNode.proj;
+
+      // Mostní pilíře u nadjezdů
+      if (nearNode.z > 0.22 && nearNode.segIndex % 3 === 0) {
+        const pillarW = Math.max(2, nr.halfW * 0.24);
+        ctx.fillStyle = pal.pillar;
+        ctx.fillRect(nr.sx - nr.halfW * 0.78 - pillarW * 0.5, nr.sy, pillarW, Math.max(0, nr.groundSy - nr.sy));
+        ctx.fillRect(nr.sx + nr.halfW * 0.78 - pillarW * 0.5, nr.sy, pillarW, Math.max(0, nr.groundSy - nr.sy));
+      }
+
+      // Krajnice / svodidla a patníky
+      const curbScale = 1.24;
+      const useAlt = Math.abs(nearNode.segIndex) % 2 === 0;
+      let curbColor = useAlt ? pal.curbA : pal.curbB;
+      if (state.showBrakingZones && nearNode.dangerRatio > 0.38) {
+        curbColor = nearNode.dangerRatio > 0.66 ? "#e11d48" : "#f59e0b";
+      }
+
+      ctx.fillStyle = curbColor;
+      ctx.beginPath();
+      ctx.moveTo(nr.sx - nr.halfW * curbScale, nr.sy);
+      ctx.lineTo(nr.sx + nr.halfW * curbScale, nr.sy);
+      ctx.lineTo(f.sx + f.halfW * curbScale, f.sy);
+      ctx.lineTo(f.sx - f.halfW * curbScale, f.sy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Svislé patníky u krajnic v popředí
+      if (useAlt && nr.forward < 160) {
+        const postH = Math.max(2, nr.halfW * 0.34);
+        const postW = Math.max(1.5, nr.halfW * 0.08);
+        ctx.fillStyle = pal.curbB;
+        ctx.fillRect(nr.sx - nr.halfW * 1.18 - postW * 0.5, nr.sy - postH, postW, postH);
+        ctx.fillRect(nr.sx + nr.halfW * 1.18 - postW * 0.5, nr.sy - postH, postW, postH);
+      }
+
+      // Vozovka
+      ctx.fillStyle = nearNode.isStart ? styles.startColor : pal.road;
+      ctx.beginPath();
+      ctx.moveTo(nr.sx - nr.halfW, nr.sy);
+      ctx.lineTo(nr.sx + nr.halfW, nr.sy);
+      ctx.lineTo(f.sx + f.halfW, f.sy);
+      ctx.lineTo(f.sx - f.halfW, f.sy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Středová vodicí kolejnice
+      ctx.strokeStyle = nearNode.z > 0.25 ? styles.trackOver : pal.rail;
+      ctx.lineWidth = Math.max(1, nr.halfW * 0.09);
+      ctx.beginPath();
+      ctx.moveTo(nr.sx, nr.sy);
+      ctx.lineTo(f.sx, f.sy);
+      ctx.stroke();
+    }
+
+    // 4. Duch soupeře na trati před hráčem (v režimu racing)
+    let ghostDeltaS = 0;
+    if (state.phase === "racing" && state.ghostCar && state.ghostCar.visible !== false) {
+      let diffS = state.ghostCar.s - car.s;
+      while (diffS > totalLen * 0.5) diffS -= totalLen;
+      while (diffS < -totalLen * 0.5) diffS += totalLen;
+      ghostDeltaS = diffS;
+
+      if (diffS > 2 && diffS < lookSteps * stepDist * 0.85) {
+        const gp = Engine.sampleAtDistance(track, state.ghostCar.s);
+        const gProj = projectWorldPoint(gp.x, gp.y, gp.z || 0);
+        if (gProj) {
+          const gw = gProj.halfW * 1.05;
+          const gh = gw * 0.52;
+          ctx.save();
+          ctx.fillStyle = styles.ghostColor;
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = Math.max(1, gw * 0.06);
+          roundRectPath(ctx, gProj.sx - gw * 0.5, gProj.sy - gh, gw, gh, gh * 0.28);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = "rgba(255,255,255,0.75)";
+          roundRectPath(ctx, gProj.sx - gw * 0.32, gProj.sy - gh * 1.32, gw * 0.64, gh * 0.42, gh * 0.18);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+    }
+
+    ctx.restore();
+
+    // 5. Kokpit vozidla v popředí (2D vrstva)
+    const vibY = car.phase === "driving" ? Math.sin(performance.now() * 0.05) * (0.4 + speedRatio * 1.2) : 0;
+    const dashTopY = height * 0.77 + vibY;
+
+    // Kapota vozu před čelním sklem
+    ctx.save();
+    ctx.fillStyle = styles.carColor;
+    ctx.beginPath();
+    ctx.moveTo(width * 0.24, dashTopY + 6);
+    ctx.lineTo(width * 0.34, height * 0.69 + vibY);
+    ctx.lineTo(width * 0.66, height * 0.69 + vibY);
+    ctx.lineTo(width * 0.76, dashTopY + 6);
+    ctx.closePath();
+    ctx.fill();
+
+    // Palubní deska
+    ctx.fillStyle = pal.dash;
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+    ctx.lineTo(0, dashTopY + 14);
+    ctx.quadraticCurveTo(width * 0.5, dashTopY - 14, width, dashTopY + 14);
+    ctx.lineTo(width, height);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = pal.dashAccent;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(0, dashTopY + 14);
+    ctx.quadraticCurveTo(width * 0.5, dashTopY - 14, width, dashTopY + 14);
+    ctx.stroke();
+
+    // Zpětné zrcátko (ukazuje ducha těsně za hráčem)
+    const mirrorW = Math.min(116, width * 0.3);
+    const mirrorH = 24;
+    const mirrorX = (width - mirrorW) * 0.5;
+    const mirrorY = 10;
+    ctx.fillStyle = pal.dash;
+    roundRectPath(ctx, mirrorX - 3, mirrorY - 3, mirrorW + 6, mirrorH + 6, 8);
+    ctx.fill();
+    ctx.fillStyle = pal.skyBottom;
+    roundRectPath(ctx, mirrorX, mirrorY, mirrorW, mirrorH, 6);
+    ctx.fill();
+    ctx.fillStyle = pal.road;
+    ctx.fillRect(mirrorX, mirrorY + mirrorH * 0.52, mirrorW, mirrorH * 0.48);
+
+    if (state.phase === "racing" && ghostDeltaS < -1 && ghostDeltaS > -95) {
+      const prox = 1 - Math.abs(ghostDeltaS) / 95;
+      const mw = 10 + prox * 16;
+      const mh = 5 + prox * 7;
+      ctx.fillStyle = styles.ghostColor;
+      roundRectPath(ctx, mirrorX + mirrorW * 0.5 - mw * 0.5, mirrorY + mirrorH * 0.65 - mh * 0.5, mw, mh, 2);
+      ctx.fill();
+    }
+
+    // Volant (otáčí se podle zatáčky a smyku)
+    const wheelX = width * 0.5 - clampedTurn * 10;
+    const wheelY = height * 0.91 + vibY;
+    const wheelR = Math.min(62, width * 0.165);
+    const steerAngle = clampedTurn * 0.85 + driftVisual * 1.4;
+
+    ctx.save();
+    ctx.translate(wheelX, wheelY);
+    ctx.rotate(steerAngle);
+
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 11;
+    ctx.beginPath();
+    ctx.arc(0, 0, wheelR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = pal.dashAccent;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, wheelR, -Math.PI * 0.56, -Math.PI * 0.44);
+    ctx.stroke();
+
+    // Ramena volantu
+    ctx.strokeStyle = "#334155";
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(-wheelR + 4, 2);
+    ctx.lineTo(wheelR - 4, 2);
+    ctx.moveTo(0, 2);
+    ctx.lineTo(0, wheelR - 4);
+    ctx.stroke();
+
+    ctx.fillStyle = pal.dash;
+    ctx.beginPath();
+    ctx.arc(0, 0, wheelR * 0.28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Digitální ukazatel rychlosti a přetížení magnetu na palubní desce
+    const gaugeW = 84;
+    const gaugeH = 26;
+    const gaugeX = width * 0.5 - gaugeW * 0.5;
+    const gaugeY = dashTopY + 4;
+    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+    roundRectPath(ctx, gaugeX, gaugeY, gaugeW, gaugeH, 7);
+    ctx.fill();
+
+    const gripRatio = Math.min(1, car.gripLoadRatio || 0);
+    ctx.fillStyle = gripRatio > 0.82 ? "#ef4444" : gripRatio > 0.65 ? "#f59e0b" : "#22c55e";
+    ctx.fillRect(gaugeX + 6, gaugeY + gaugeH - 5, (gaugeW - 12) * gripRatio, 2.5);
+
+    ctx.fillStyle = "#f8fafc";
+    ctx.font = "700 13px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${Math.round(car.speed)}`, gaugeX + gaugeW * 0.5, gaugeY + 11);
+
+    ctx.restore();
+  }
+
   function renderCanvas(dt) {
     const rect = dom.boardCard.getBoundingClientRect();
     const width = Math.max(1, rect.width);
@@ -915,6 +1289,11 @@
 
     if (state.phase === "drawing") {
       drawDrawingStroke(dom.ctx, styles);
+      return;
+    }
+
+    if (state.viewMode === "cockpit") {
+      renderCockpitView(dom.ctx, width, height, styles);
       return;
     }
 
@@ -1055,6 +1434,7 @@
 
   function resetToNewTrack() {
     state.phase = "drawing";
+    state.viewMode = "top";
     state.rawPoints = [];
     state.track = null;
     state.car = Engine.createCarState();
@@ -1279,6 +1659,51 @@
   function closeModal() {
     dom.modalBackdrop.classList.remove("open");
     dom.modalCard.innerHTML = "";
+  }
+
+  function openRaceViewSelectModal() {
+    state.modalOpenedAt = performance.now();
+    dom.modalCard.innerHTML = `
+      <h2 class="modal-title">${getText(state.lang, "raceViewModalTitle")}</h2>
+      <p class="guide-p" style="text-align:center; color:var(--text-muted);">
+        ${getText(state.lang, "raceViewModalDesc")}
+      </p>
+      <div class="tile-grid-2" style="margin-top:12px;">
+        <button id="btnSelectTopView" class="visual-tile ${state.viewMode === "top" ? "active" : ""}" type="button">
+          <span class="tile-icon" style="font-size:20px;">🗺️</span>
+          <span class="tile-name">${getText(state.lang, "raceViewTopTitle")}</span>
+          <span class="tile-sub">${getText(state.lang, "raceViewTopSub")}</span>
+        </button>
+        <button id="btnSelectCockpitView" class="visual-tile ${state.viewMode === "cockpit" ? "active" : ""}" type="button">
+          <span class="tile-icon" style="font-size:20px;">🏎️</span>
+          <span class="tile-name">${getText(state.lang, "raceViewCockpitTitle")}</span>
+          <span class="tile-sub">${getText(state.lang, "raceViewCockpitSub")}</span>
+        </button>
+      </div>
+      <div class="modal-row-btns">
+        <button id="btnCancelRaceStart" class="modal-sec-btn" type="button">${getText(state.lang, "btnCancel")}</button>
+      </div>
+    `;
+    dom.modalBackdrop.classList.add("open");
+
+    document.getElementById("btnSelectTopView").addEventListener("click", () => {
+      if (performance.now() - state.modalOpenedAt < CONFIG.ui.modalGuardMs) return;
+      state.viewMode = "top";
+      closeModal();
+      startManualRace();
+    });
+
+    document.getElementById("btnSelectCockpitView").addEventListener("click", () => {
+      if (performance.now() - state.modalOpenedAt < CONFIG.ui.modalGuardMs) return;
+      state.viewMode = "cockpit";
+      closeModal();
+      startManualRace();
+    });
+
+    document.getElementById("btnCancelRaceStart").addEventListener("click", () => {
+      if (performance.now() - state.modalOpenedAt < CONFIG.ui.modalGuardMs) return;
+      closeModal();
+    });
   }
 
   function openConfirmNewModal() {
@@ -1795,6 +2220,7 @@
           state.rawPoints = savedSession.rawPoints;
           state.track = Engine.buildTrack(state.rawPoints, rect.width, rect.height, state.settings.difficulty);
           state.phase = savedSession.phase;
+          state.viewMode = savedSession.viewMode === "cockpit" ? "cockpit" : "top";
           state.hasMoves = Boolean(savedSession.hasMoves);
           state.showBrakingZones = Boolean(savedSession.showBrakingZones);
           state.raceElapsedSec = Number(savedSession.raceElapsedSec) || 0;
