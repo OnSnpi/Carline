@@ -422,6 +422,9 @@
         resampled.totalLength,
         shiftIdx
       );
+      for (let k = 0; k < finalSamples.length; k++) {
+        finalSamples[k].drawOrder = k;
+      }
       const crossings = detectCrossings(finalSamples);
 
       const track = {
