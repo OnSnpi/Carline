@@ -568,7 +568,193 @@
     ctx.restore();
   }
 
-  roundRectPath
+  function drawStaticTrackAndBridges(ctx, styles) {
+    const track = state.track;
+    if (!track || !track.samples || track.samples.length < 2) return;
+
+    const pts = track.samples;
+    const n = pts.length;
+    const isTournament = state.profile.selectedTheme === "tournament";
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // 1. Základní souvislá smyčka tratě (statická)
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < n; i++) {
+      ctx.lineTo(pts[i].x, pts[i].y);
+    }
+    ctx.closePath();
+
+    ctx.strokeStyle = styles.trackBed;
+    ctx.lineWidth = 22;
+    ctx.stroke();
+
+    if (isTournament) {
+      for (let i = 0; i < n; i += 2) {
+        const p0 = pts[i];
+        const p1 = pts[(i + 1) % n];
+        if (p0.dangerRatio > 0.32) {
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
+          ctx.strokeStyle = Math.floor(i / 2) % 2 === 0 ? "#ef4444" : "#ffffff";
+          ctx.lineWidth = 24;
+          ctx.stroke();
+        }
+      }
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < n; i++) {
+        ctx.lineTo(pts[i].x, pts[i].y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = "#334155";
+      ctx.lineWidth = 17;
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = styles.trackRail;
+    ctx.lineWidth = 9;
+    ctx.stroke();
+
+    if (state.showBrakingZones) {
+      for (let i = 0; i < n; i++) {
+        const p0 = pts[i];
+        const p1 = pts[(i + 1) % n];
+        if (p0.dangerRatio > 0.38) {
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
+          ctx.strokeStyle = p0.dangerRatio > 0.66 ? "#e11d48" : "#d97706";
+          ctx.lineWidth = 5;
+          ctx.stroke();
+        }
+      }
+    }
+
+    // 2. Startovní / cílová čára
+    const startPt = pts[0];
+    const startAngle = Math.atan2(startPt.ty, startPt.tx);
+    ctx.save();
+    ctx.translate(startPt.x, startPt.y);
+    ctx.rotate(startAngle);
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(-4, -12, 8, 24);
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(-4, -12, 4, 6);
+    ctx.fillRect(0, -6, 4, 6);
+    ctx.fillRect(-4, 0, 4, 6);
+    ctx.fillRect(0, 6, 4, 6);
+
+    ctx.strokeStyle = styles.startColor;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-4.5, -12.5, 9, 25);
+    ctx.restore();
+
+    // 3. Horní mosty ve všech kříženích (statické, vždy stejné)
+    const crossings = track.crossings || [];
+    const halfSpan = 10;
+    ctx.lineCap = "butt";
+
+    for (const cr of crossings) {
+      ctx.beginPath();
+      for (let k = -halfSpan; k <= halfSpan; k++) {
+        const idx = (cr.overIndex + k + n) % n;
+        const p = pts[idx];
+        if (k === -halfSpan) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.34)";
+      ctx.lineWidth = 28;
+      ctx.stroke();
+
+      ctx.strokeStyle = styles.cardBg;
+      ctx.lineWidth = 25;
+      ctx.stroke();
+
+      ctx.strokeStyle = styles.trackBed;
+      ctx.lineWidth = 21;
+      ctx.stroke();
+
+      ctx.strokeStyle = styles.trackOver;
+      ctx.lineWidth = 9;
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function drawCarWithBridgeClip(ctx, carObj, fillColor, isGhost) {
+    const track = state.track;
+    if (!track || !carObj || carObj.visible === false) return;
+
+    if (carObj.phase === "flying") {
+      drawCarEntity(ctx, carObj, fillColor, isGhost);
+      return;
+    }
+
+    const crossings = track.crossings || [];
+    const pts = track.samples;
+    const n = pts.length;
+    const sampleIdx = carObj.sampleIndex || 0;
+
+    function circularDiff(a, b) {
+      let diff = Math.abs(a - b);
+      if (diff > n * 0.5) diff = n - diff;
+      return diff;
+    }
+
+    const blockingBridges = [];
+    for (const cr of crossings) {
+      const distUnder = circularDiff(sampleIdx, cr.underIndex);
+      const distOver = circularDiff(sampleIdx, cr.overIndex);
+      if (distUnder < distOver && (distUnder <= 15 || Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 34)) {
+        blockingBridges.push(cr);
+      }
+    }
+
+    if (blockingBridges.length === 0) {
+      drawCarEntity(ctx, carObj, fillColor, isGhost);
+      return;
+    }
+
+    const rect = dom.boardCard.getBoundingClientRect();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, rect.width, rect.height);
+
+    const halfSpan = 10;
+    const halfBridgeWidth = 12.5;
+
+    for (const cr of blockingBridges) {
+      for (let k = -halfSpan; k < halfSpan; k++) {
+        const idx0 = (cr.overIndex + k + n) % n;
+        const idx1 = (cr.overIndex + k + 1 + n) % n;
+        const p0 = pts[idx0];
+        const p1 = pts[idx1];
+        const dx = p1.x - p0.x;
+        const dy = p1.y - p0.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = (-dy / len) * halfBridgeWidth;
+        const ny = (dx / len) * halfBridgeWidth;
+
+        ctx.moveTo(p0.x + nx, p0.y + ny);
+        ctx.lineTo(p1.x + nx, p1.y + ny);
+        ctx.lineTo(p1.x - nx, p1.y - ny);
+        ctx.lineTo(p0.x - nx, p0.y - ny);
+        ctx.closePath();
+      }
+    }
+
+    ctx.clip("evenodd");
+    drawCarEntity(ctx, carObj, fillColor, isGhost);
+    ctx.restore();
+  }
 
   function roundRectPath(ctx, x, y, w, h, r) {
     const radius = Math.min(r, w * 0.5, h * 0.5);
