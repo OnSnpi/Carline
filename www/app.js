@@ -607,96 +607,98 @@
     octx.setTransform(dpr, 0, 0, dpr, 0, 0);
     octx.clearRect(0, 0, width, height);
 
-    // Seřadíme vzorky podle skutečného pořadí malování hráčem (drawOrder = 0 .. N-1)
-    const n = track.samples.length;
-    const ordered = track.samples
-      .map((s, idx) => ({ sample: s, loopIdx: idx, order: typeof s.drawOrder === "number" ? s.drawOrder : idx }))
-      .sort((a, b) => a.order - b.order);
-
+    const pts = track.samples;
+    const n = pts.length;
     const isTournament = state.profile.selectedTheme === "tournament";
 
     octx.save();
     octx.lineCap = "round";
     octx.lineJoin = "round";
 
-    // Kreslíme trať po krátkých souvislých úsecích od nejdříve namalovaného (spodního)
-    // po nejpozději namalovaný (horní), takže každý pozdější most přirozeně překryje dřívější cestu
-    const step = 6;
-    for (let start = 0; start < n; start += step) {
-      const end = Math.min(n - 1, start + step - 1);
+    // 1. Celá souvislá základní smyčka tratě najednou (bez přerušování na články)
+    octx.beginPath();
+    octx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < n; i++) {
+      octx.lineTo(pts[i].x, pts[i].y);
+    }
+    octx.closePath();
 
-      const traceSegment = () => {
-        octx.beginPath();
-        const first = ordered[start].sample;
-        octx.moveTo(first.x, first.y);
-        for (let k = start + 1; k <= end; k++) {
-          octx.lineTo(ordered[k].sample.x, ordered[k].sample.y);
+    octx.strokeStyle = styles.trackBed;
+    octx.lineWidth = 22;
+    octx.stroke();
+
+    if (isTournament) {
+      for (let i = 0; i < n; i += 2) {
+        const p0 = pts[i];
+        const p1 = pts[(i + 1) % n];
+        if (p0.dangerRatio > 0.32) {
+          octx.beginPath();
+          octx.moveTo(p0.x, p0.y);
+          octx.lineTo(p1.x, p1.y);
+          octx.strokeStyle = Math.floor(i / 2) % 2 === 0 ? "#ef4444" : "#ffffff";
+          octx.lineWidth = 24;
+          octx.stroke();
         }
-        // Napojení na další vzorek po smyčce tratě, aby nevznikaly mezery mezi kroky
-        const nextLoopIdx = (ordered[end].loopIdx + 1) % n;
-        octx.lineTo(track.samples[nextLoopIdx].x, track.samples[nextLoopIdx].y);
-      };
+      }
+      octx.beginPath();
+      octx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < n; i++) {
+        octx.lineTo(pts[i].x, pts[i].y);
+      }
+      octx.closePath();
+      octx.strokeStyle = "#334155";
+      octx.lineWidth = 17;
+      octx.stroke();
+    }
 
-      // Stín a oddělovací lem mostu
-      traceSegment();
-      octx.strokeStyle = "rgba(0, 0, 0, 0.30)";
+    octx.strokeStyle = styles.trackRail;
+    octx.lineWidth = 9;
+    octx.stroke();
+
+    if (state.showBrakingZones) {
+      for (let i = 0; i < n; i++) {
+        const p0 = pts[i];
+        const p1 = pts[(i + 1) % n];
+        if (p0.dangerRatio > 0.38) {
+          octx.beginPath();
+          octx.moveTo(p0.x, p0.y);
+          octx.lineTo(p1.x, p1.y);
+          octx.strokeStyle = p0.dangerRatio > 0.66 ? "#e11d48" : "#d97706";
+          octx.lineWidth = 5;
+          octx.stroke();
+        }
+      }
+    }
+
+    // 2. Horní mosty v kříženích seřazené od spodnějšího k hornějšímu podle drawOrder
+    const crossings = (track.crossings || []).slice().sort((a, b) => a.overOrder - b.overOrder);
+    const halfSpan = 11;
+    octx.lineCap = "butt";
+
+    for (const cr of crossings) {
+      octx.beginPath();
+      for (let k = -halfSpan; k <= halfSpan; k++) {
+        const idx = (cr.overIndex + k + n) % n;
+        const p = pts[idx];
+        if (k === -halfSpan) octx.moveTo(p.x, p.y);
+        else octx.lineTo(p.x, p.y);
+      }
+
+      octx.strokeStyle = "rgba(0, 0, 0, 0.32)";
       octx.lineWidth = 27.5;
       octx.stroke();
 
-      traceSegment();
       octx.strokeStyle = styles.cardBg;
       octx.lineWidth = 24.5;
       octx.stroke();
 
-      // Vozovka
-      traceSegment();
       octx.strokeStyle = styles.trackBed;
       octx.lineWidth = 21;
       octx.stroke();
 
-      // Turnajové obrubníky v zatáčkách
-      if (isTournament) {
-        for (let k = start; k <= end; k++) {
-          const item = ordered[k];
-          const p0 = item.sample;
-          const p1 = track.samples[(item.loopIdx + 1) % n];
-          if (p0.dangerRatio > 0.32) {
-            octx.beginPath();
-            octx.moveTo(p0.x, p0.y);
-            octx.lineTo(p1.x, p1.y);
-            octx.strokeStyle = Math.floor(item.loopIdx / 2) % 2 === 0 ? "#ef4444" : "#ffffff";
-            octx.lineWidth = 23;
-            octx.stroke();
-          }
-        }
-        traceSegment();
-        octx.strokeStyle = "#334155";
-        octx.lineWidth = 17;
-        octx.stroke();
-      }
-
-      // Středová vodicí kolejnice
-      traceSegment();
-      octx.strokeStyle = styles.trackRail;
+      octx.strokeStyle = styles.trackOver;
       octx.lineWidth = 9;
       octx.stroke();
-
-      // Brzdné zóny (Rada)
-      if (state.showBrakingZones) {
-        for (let k = start; k <= end; k++) {
-          const item = ordered[k];
-          const p0 = item.sample;
-          const p1 = track.samples[(item.loopIdx + 1) % n];
-          if (p0.dangerRatio > 0.38) {
-            octx.beginPath();
-            octx.moveTo(p0.x, p0.y);
-            octx.lineTo(p1.x, p1.y);
-            octx.strokeStyle = p0.dangerRatio > 0.66 ? "#e11d48" : "#d97706";
-            octx.lineWidth = 5;
-            octx.stroke();
-          }
-        }
-      }
     }
 
     // Startovní / cílová čára
