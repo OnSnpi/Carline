@@ -683,6 +683,21 @@
     return typeof sample.drawOrder === "number" ? sample.drawOrder : idx;
   }
 
+  function roundRectPath(ctx, x, y, w, h, r) {
+    const radius = Math.min(r, w * 0.5, h * 0.5);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + w - radius, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+    ctx.lineTo(x + w, y + h - radius);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+    ctx.lineTo(x + radius, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+  }
+
   function renderLayeredTrackAndCars(ctx, styles, entities) {
     const track = state.track;
     if (!track || !track.samples || track.samples.length < 2) return;
@@ -691,7 +706,6 @@
     const n = pts.length;
     const isTournament = state.profile.selectedTheme === "tournament";
 
-    // Z-úroveň každého vzorku (rostoucí od 0 do n-1 od začátku k cíli)
     const activeEntities = (entities || [])
       .filter((item) => item && item.car && item.car.visible !== false)
       .map((item) => ({
@@ -700,48 +714,32 @@
       }))
       .sort((a, b) => a.zOrder - b.zOrder);
 
-    // Kreslíme trať po souvislých úsecích odspodu nahoru a přesně v místě Z-úrovně vozu vykreslíme vůz
-    let cursor = 0;
-    const chunkStep = 14;
+    const drivingEntities = activeEntities.filter((e) => e.car.phase !== "flying");
+    const flyingEntities = activeEntities.filter((e) => e.car.phase === "flying");
 
-    while (cursor < n) {
-      const nextChunkEnd = Math.min(n - 1, cursor + chunkStep - 1);
-
-      // Najdeme vozy, jejichž Z-úroveň spadá do aktuálního úseku [cursor, nextChunkEnd]
-      const entitiesInChunk = activeEntities.filter(
-        (e) => e.zOrder >= cursor && e.zOrder <= nextChunkEnd
-      );
-
-      if (entitiesInChunk.length === 0) {
-        drawTrackSegmentRibbon(ctx, pts, cursor, nextChunkEnd, styles, isTournament);
-        if (cursor === 0) {
-          drawStartFinishLine(ctx, track, styles);
-        }
-      } else {
-        let subCursor = cursor;
-        for (const ent of entitiesInChunk) {
-          if (ent.zOrder >= subCursor) {
-            drawTrackSegmentRibbon(ctx, pts, subCursor, ent.zOrder, styles, isTournament);
-            if (subCursor === 0) {
-              drawStartFinishLine(ctx, track, styles);
-            }
-            subCursor = ent.zOrder + 1;
+    if (drivingEntities.length === 0) {
+      drawTrackSegmentRibbon(ctx, pts, 0, n - 1, styles, isTournament);
+      drawStartFinishLine(ctx, track, styles);
+    } else {
+      let cursor = 0;
+      for (const ent of drivingEntities) {
+        const splitIdx = Math.max(cursor, Math.min(n - 1, ent.zOrder));
+        if (splitIdx >= cursor) {
+          drawTrackSegmentRibbon(ctx, pts, cursor, splitIdx, styles, isTournament);
+          if (cursor === 0) {
+            drawStartFinishLine(ctx, track, styles);
           }
-          drawCarEntity(ctx, ent.car, ent.color, ent.isGhost);
+          cursor = splitIdx + 1;
         }
-        if (subCursor <= nextChunkEnd) {
-          drawTrackSegmentRibbon(ctx, pts, subCursor, nextChunkEnd, styles, isTournament);
-        }
-      }
-
-      cursor = nextChunkEnd + 1;
-    }
-
-    // Pokud je některý vůz ve fázi výletu mimo trať (flying), vykreslíme ho vždy úplně navrch
-    for (const ent of activeEntities) {
-      if (ent.car.phase === "flying") {
         drawCarEntity(ctx, ent.car, ent.color, ent.isGhost);
       }
+      if (cursor <= n - 1) {
+        drawTrackSegmentRibbon(ctx, pts, cursor, n - 1, styles, isTournament);
+      }
+    }
+
+    for (const ent of flyingEntities) {
+      drawCarEntity(ctx, ent.car, ent.color, ent.isGhost);
     }
   }
 
@@ -783,7 +781,6 @@
       ctx.fill();
       ctx.stroke();
     } else if (carStyle === "prototype") {
-      // Aerodynamický Le Mans klín se zúženou přídí, kapkovitou kabinou a zadním křídlem
       ctx.beginPath();
       ctx.moveTo(14.5, 0);
       ctx.quadraticCurveTo(8, -6.5, -10, -7.5);
@@ -795,18 +792,14 @@
       ctx.fill();
       ctx.stroke();
 
-      // Zadní přítlačné křídlo
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(-13.5, -8, 2.8, 16);
 
-      // Středová kapkovitá kabina
       ctx.beginPath();
       ctx.ellipse(1.5, 0, 4.5, 3, 0, 0, Math.PI * 2);
       ctx.fill();
     } else if (carStyle === "bus") {
-      // Prodloužený autobus s panoramatickým čelním sklem a střešními okny
-      ctx.beginPath();
-      ctx.roundRect(-14.5, -7.5, 29, 15, 3.5);
+      roundRectPath(ctx, -14.5, -7.5, 29, 15, 3.5);
       ctx.fill();
       ctx.stroke();
 
@@ -815,29 +808,22 @@
       ctx.fillRect(-10, -4.2, 4.5, 8.4);
       ctx.fillRect(-2.5, -4.2, 4.5, 8.4);
     } else if (carStyle === "truck") {
-      // Návěs vzadu
-      ctx.beginPath();
-      ctx.roundRect(-16.5, -7.5, 19, 15, 2.5);
+      roundRectPath(ctx, -16.5, -7.5, 19, 15, 2.5);
       ctx.fill();
       ctx.stroke();
 
-      // Závěs / točna
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(2.5, -2.5, 2.5, 5);
 
-      // Přední kabina tahače
       ctx.fillStyle = fillColor;
-      ctx.beginPath();
-      ctx.roundRect(4.5, -7, 9.5, 14, 3);
+      roundRectPath(ctx, 4.5, -7, 9.5, 14, 3);
       ctx.fill();
       ctx.stroke();
 
-      // Čelní sklo tahače
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(10, -4.8, 2.8, 9.6);
     } else {
-      ctx.beginPath();
-      ctx.roundRect(-11, -7, 22, 14, 4);
+      roundRectPath(ctx, -11, -7, 22, 14, 4);
       ctx.fill();
       ctx.stroke();
       if (!isGhost) {
@@ -1709,22 +1695,28 @@
 
   async function init() {
     cacheDom();
+    applyI18n();
+    updateHud();
+    resizeCanvas();
+    bindEvents();
 
-    const savedProfile = await loadStorage(CONFIG.storageKeys.profile);
-    if (savedProfile) {
-      if (savedProfile.profile) {
-        state.profile = Object.assign(
-          JSON.parse(JSON.stringify(CONFIG.defaults.profile)),
-          savedProfile.profile
-        );
+    try {
+      const savedProfile = await loadStorage(CONFIG.storageKeys.profile);
+      if (savedProfile) {
+        if (savedProfile.profile) {
+          state.profile = Object.assign(
+            JSON.parse(JSON.stringify(CONFIG.defaults.profile)),
+            savedProfile.profile
+          );
+        }
+        if (savedProfile.settings) {
+          state.settings = Object.assign(
+            JSON.parse(JSON.stringify(CONFIG.defaults.settings)),
+            savedProfile.settings
+          );
+        }
       }
-      if (savedProfile.settings) {
-        state.settings = Object.assign(
-          JSON.parse(JSON.stringify(CONFIG.defaults.settings)),
-          savedProfile.settings
-        );
-      }
-    }
+    } catch (_) {}
 
     state.lang = detectLanguage(state.settings.lang);
     refreshUnlocks();
@@ -1733,45 +1725,48 @@
     updateHud();
     resizeCanvas();
 
-    const savedSession = await loadStorage(CONFIG.storageKeys.session);
-    if (
-      savedSession &&
-      (savedSession.phase === "demo" || savedSession.phase === "racing") &&
-      Array.isArray(savedSession.rawPoints)
-    ) {
-      const check = Engine.validateStroke(savedSession.rawPoints);
-      if (check.valid) {
-        const rect = dom.boardCard.getBoundingClientRect();
-        state.rawPoints = savedSession.rawPoints;
-        state.track = Engine.buildTrack(state.rawPoints, rect.width, rect.height, state.settings.difficulty);
-        state.phase = savedSession.phase;
-        state.hasMoves = Boolean(savedSession.hasMoves);
-        state.showBrakingZones = Boolean(savedSession.showBrakingZones);
-        state.raceElapsedSec = Number(savedSession.raceElapsedSec) || 0;
-        state.car = Object.assign(Engine.createCarState(), savedSession.car || {});
-        state.car.phase = "driving";
-        state.car.visible = true;
-        const pt = Engine.sampleAtDistance(state.track, state.car.s);
-        state.car.x = pt.x;
-        state.car.y = pt.y;
-        state.car.angle = Math.atan2(pt.ty, pt.tx);
-        state.car.sampleIndex = pt.sampleIndex;
+    try {
+      const savedSession = await loadStorage(CONFIG.storageKeys.session);
+      if (
+        savedSession &&
+        (savedSession.phase === "demo" || savedSession.phase === "racing") &&
+        Array.isArray(savedSession.rawPoints)
+      ) {
+        const check = Engine.validateStroke(savedSession.rawPoints);
+        if (check.valid) {
+          const rect = dom.boardCard.getBoundingClientRect();
+          state.rawPoints = savedSession.rawPoints;
+          state.track = Engine.buildTrack(state.rawPoints, rect.width, rect.height, state.settings.difficulty);
+          state.phase = savedSession.phase;
+          state.hasMoves = Boolean(savedSession.hasMoves);
+          state.showBrakingZones = Boolean(savedSession.showBrakingZones);
+          state.raceElapsedSec = Number(savedSession.raceElapsedSec) || 0;
+          state.car = Object.assign(Engine.createCarState(), savedSession.car || {});
+          state.car.phase = "driving";
+          state.car.visible = true;
+          const pt = Engine.sampleAtDistance(state.track, state.car.s);
+          state.car.x = pt.x;
+          state.car.y = pt.y;
+          state.car.angle = Math.atan2(pt.ty, pt.tx);
+          state.car.sampleIndex = pt.sampleIndex;
 
-        state.ghostCar = Object.assign(Engine.createCarState(), savedSession.ghostCar || {});
-        const gpt = Engine.sampleAtDistance(state.track, state.ghostCar.s);
-        state.ghostCar.x = gpt.x;
-        state.ghostCar.y = gpt.y;
-        state.ghostCar.angle = Math.atan2(gpt.ty, gpt.tx);
-        state.ghostCar.sampleIndex = gpt.sampleIndex;
+          state.ghostCar = Object.assign(Engine.createCarState(), savedSession.ghostCar || {});
+          const gpt = Engine.sampleAtDistance(state.track, state.ghostCar.s);
+          state.ghostCar.x = gpt.x;
+          state.ghostCar.y = gpt.y;
+          state.ghostCar.angle = Math.atan2(gpt.ty, gpt.tx);
+          state.ghostCar.sampleIndex = gpt.sampleIndex;
 
-        renderStatusActionSlot();
-        renderStatus();
-        updateHud();
+          renderStatusActionSlot();
+          renderStatus();
+          updateHud();
+        }
       }
+    } catch (_) {
+      resetToNewTrack();
     }
 
     renderCanvas(0.016);
-    bindEvents();
     global.requestAnimationFrame(gameLoop);
   }
 
