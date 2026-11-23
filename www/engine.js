@@ -163,6 +163,7 @@
         tNorm: k / count,
         x: a.x + (b.x - a.x) * t,
         y: a.y + (b.y - a.y) * t,
+        z: 0,
         tx: 1,
         ty: 0,
         signedCurvature: 0,
@@ -349,6 +350,7 @@
         tNorm: k / n,
         x: src.x,
         y: src.y,
+        z: src.z || 0,
         tx: src.tx,
         ty: src.ty,
         signedCurvature: src.signedCurvature,
@@ -423,7 +425,21 @@
         shiftIdx
       );
       const crossings = detectCrossings(finalSamples);
-      
+      const sampleCount = finalSamples.length;
+      if (sampleCount > 0 && crossings.length > 0) {
+        const rampSpan = Math.max(14, Math.floor(sampleCount * 0.042));
+        for (const cr of crossings) {
+          for (let k = -rampSpan; k <= rampSpan; k++) {
+            const idx = (cr.overIndex + k + sampleCount) % sampleCount;
+            const norm = Math.abs(k) / rampSpan;
+            const elev = 0.5 * (1 + Math.cos(Math.PI * norm));
+            if (elev > finalSamples[idx].z) {
+              finalSamples[idx].z = elev;
+            }
+          }
+        }
+      }
+
       const track = {
         loopPoints: fitted,
         samples: finalSamples,
@@ -457,6 +473,7 @@
         return {
           x: 0,
           y: 0,
+          z: 0,
           tx: 1,
           ty: 0,
           signedCurvature: 0,
@@ -480,6 +497,7 @@
       return {
         x: s0.x + (s1.x - s0.x) * frac,
         y: s0.y + (s1.y - s0.y) * frac,
+        z: (s0.z || 0) + ((s1.z || 0) - (s0.z || 0)) * frac,
         tx: s0.tx + (s1.tx - s0.tx) * frac,
         ty: s0.ty + (s1.ty - s0.ty) * frac,
         signedCurvature: s0.signedCurvature + (s1.signedCurvature - s0.signedCurvature) * frac,
