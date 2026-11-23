@@ -657,51 +657,53 @@
 
     // 3. Horní mosty ve všech kříženích (statické, vždy stejné)
     const crossings = track.crossings || [];
-    const halfSpan = 10;
-    ctx.lineCap = "butt";
-
     for (const cr of crossings) {
-      ctx.beginPath();
-      for (let k = -halfSpan; k <= halfSpan; k++) {
-        const idx = (cr.overIndex + k + n) % n;
-        const p = pts[idx];
-        if (k === -halfSpan) ctx.moveTo(p.x, p.y);
-        else ctx.lineTo(p.x, p.y);
-      }
-
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.34)";
-      ctx.lineWidth = 28;
-      ctx.stroke();
-
-      ctx.strokeStyle = styles.cardBg;
-      ctx.lineWidth = 25;
-      ctx.stroke();
-
-      ctx.strokeStyle = styles.trackBed;
-      ctx.lineWidth = 21;
-      ctx.stroke();
-
-      ctx.strokeStyle = styles.trackOver;
-      ctx.lineWidth = 9;
-      ctx.stroke();
+      drawSingleBridgeOverpass(ctx, track, cr, styles);
     }
 
     ctx.restore();
   }
 
-  function drawCarWithBridgeClip(ctx, carObj, fillColor, isGhost) {
-    const track = state.track;
-    if (!track || !carObj || carObj.visible === false) return;
-
-    if (carObj.phase === "flying") {
-      drawCarEntity(ctx, carObj, fillColor, isGhost);
-      return;
-    }
-
-    const crossings = track.crossings || [];
+  function drawSingleBridgeOverpass(ctx, track, cr, styles) {
     const pts = track.samples;
     const n = pts.length;
-    const sampleIdx = carObj.sampleIndex || 0;
+    const halfSpan = 11;
+
+    ctx.save();
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "round";
+
+    ctx.beginPath();
+    for (let k = -halfSpan; k <= halfSpan; k++) {
+      const idx = (cr.overIndex + k + n) % n;
+      const p = pts[idx];
+      if (k === -halfSpan) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    }
+
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.34)";
+    ctx.lineWidth = 28;
+    ctx.stroke();
+
+    ctx.strokeStyle = styles.cardBg;
+    ctx.lineWidth = 25;
+    ctx.stroke();
+
+    ctx.strokeStyle = styles.trackBed;
+    ctx.lineWidth = 21;
+    ctx.stroke();
+
+    ctx.strokeStyle = styles.trackOver;
+    ctx.lineWidth = 9;
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function getBridgesOverCars(track, cars) {
+    const crossings = (track && track.crossings) || [];
+    if (crossings.length === 0) return [];
+    const n = track.samples.length;
 
     function circularDiff(a, b) {
       let diff = Math.abs(a - b);
@@ -709,80 +711,34 @@
       return diff;
     }
 
-    const blockingBridges = [];
-    for (const cr of crossings) {
-      const distUnder = circularDiff(sampleIdx, cr.underIndex);
-      const distOver = circularDiff(sampleIdx, cr.overIndex);
-      if (distUnder < distOver && (distUnder <= 18 || Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 38)) {
-        blockingBridges.push(cr);
-      }
-    }
+    const overSet = new Set();
+    for (const carObj of cars) {
+      if (!carObj || carObj.visible === false || carObj.phase === "flying") continue;
+      const sampleIdx = carObj.sampleIndex || 0;
+      const cosA = Math.cos(carObj.angle || 0);
+      const sinA = Math.sin(carObj.angle || 0);
+      const frontX = carObj.x + cosA * 14;
+      const frontY = carObj.y + sinA * 14;
+      const rearX = carObj.x - cosA * 14;
+      const rearY = carObj.y - sinA * 14;
 
-    if (blockingBridges.length === 0) {
-      drawCarEntity(ctx, carObj, fillColor, isGhost);
-      return;
-    }
-
-    const rect = dom.boardCard.getBoundingClientRect();
-    ctx.save();
-    ctx.beginPath();
-    // Vnější obdélník plátna kreslený po směru hodinových ručiček (+1 v nonzero pravidle)
-    ctx.moveTo(0, 0);
-    ctx.lineTo(rect.width, 0);
-    ctx.lineTo(rect.width, rect.height);
-    ctx.lineTo(0, rect.height);
-    ctx.closePath();
-
-    const halfSpan = 12;
-    const halfBridgeWidth = 13.5;
-
-    for (const cr of blockingBridges) {
-      for (let k = -halfSpan; k < halfSpan; k++) {
-        const idx0 = (cr.overIndex + k + n) % n;
-        const idx1 = (cr.overIndex + k + 1 + n) % n;
-        const p0 = pts[idx0];
-        const p1 = pts[idx1];
-        const dx = p1.x - p0.x;
-        const dy = p1.y - p0.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const nx = (-dy / len) * halfBridgeWidth;
-        const ny = (dx / len) * halfBridgeWidth;
-
-        // Vnitřní výřez mostu kreslený striktně proti směru hodinových ručiček (-1 v nonzero pravidle),
-        // takže překrývající se dílky mostu v zatáčce nikdy nevytvoří díru zpět
-        const ax = p0.x + nx;
-        const ay = p0.y + ny;
-        const bx = p1.x + nx;
-        const by = p1.y + ny;
-        const cx = p1.x - nx;
-        const cy = p1.y - ny;
-        const dx2 = p0.x - nx;
-        const dy2 = p0.y - ny;
-
-        const signedArea2 =
-          (bx - ax) * (by + ay) +
-          (cx - bx) * (cy + by) +
-          (dx2 - cx) * (dy2 + cy) +
-          (ax - dx2) * (ay + dy2);
-
-        if (signedArea2 > 0) {
-          ctx.moveTo(ax, ay);
-          ctx.lineTo(bx, by);
-          ctx.lineTo(cx, cy);
-          ctx.lineTo(dx2, dy2);
-        } else {
-          ctx.moveTo(ax, ay);
-          ctx.lineTo(dx2, dy2);
-          ctx.lineTo(cx, cy);
-          ctx.lineTo(bx, by);
+      for (const cr of crossings) {
+        const distUnder = circularDiff(sampleIdx, cr.underIndex);
+        const distOver = circularDiff(sampleIdx, cr.overIndex);
+        if (distUnder < distOver) {
+          const nearByIndex = distUnder <= 22;
+          const nearByBody =
+            Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 36 ||
+            Math.hypot(frontX - cr.x, frontY - cr.y) <= 28 ||
+            Math.hypot(rearX - cr.x, rearY - cr.y) <= 28;
+          if (nearByIndex || nearByBody) {
+            overSet.add(cr);
+          }
         }
-        ctx.closePath();
       }
     }
 
-    ctx.clip("nonzero");
-    drawCarEntity(ctx, carObj, fillColor, isGhost);
-    ctx.restore();
+    return Array.from(overSet).sort((a, b) => a.overOrder - b.overOrder);
   }
 
   function roundRectPath(ctx, x, y, w, h, r) {
@@ -931,14 +887,22 @@
     drawStaticTrackAndBridges(dom.ctx, styles);
 
     if (state.phase === "demo") {
-      drawCarWithBridgeClip(dom.ctx, state.car, styles.carColor, false);
+      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      const bridgesOver = getBridgesOverCars(state.track, [state.car]);
+      for (const cr of bridgesOver) {
+        drawSingleBridgeOverpass(dom.ctx, state.track, cr, styles);
+      }
       return;
     }
 
     if (state.phase === "racing") {
       updateAndDrawSparks(dom.ctx, dt || 0.016);
-      drawCarWithBridgeClip(dom.ctx, state.ghostCar, styles.ghostColor, true);
-      drawCarWithBridgeClip(dom.ctx, state.car, styles.carColor, false);
+      drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
+      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
+      const bridgesOver = getBridgesOverCars(state.track, [state.ghostCar, state.car]);
+      for (const cr of bridgesOver) {
+        drawSingleBridgeOverpass(dom.ctx, state.track, cr, styles);
+      }
     }
   }
 
