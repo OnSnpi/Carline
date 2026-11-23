@@ -33,7 +33,10 @@
     audioEngine: null
   };
 
-  const dom = {};
+  const dom = {
+    trackCacheCanvas: document.createElement("canvas"),
+    trackCacheKey: ""
+  };
 
   function cacheDom() {
     dom.appRoot = document.getElementById("appRoot");
@@ -568,179 +571,208 @@
     ctx.restore();
   }
 
-  function drawStaticTrackAndBridges(ctx, styles) {
-    const track = state.track;
-    if (!track || !track.samples || track.samples.length < 2) return;
+  function buildTrackCacheKey(width, height) {
+    return [
+      width,
+      height,
+      state.profile.selectedTheme,
+      state.showBrakingZones ? 1 : 0,
+      state.track ? state.track.totalLength.toFixed(1) : "0",
+      state.track && state.track.samples[0] ? state.track.samples[0].x.toFixed(1) : "0"
+    ].join("|");
+  }
 
-    const pts = track.samples;
-    const n = pts.length;
+  function ensureStaticTrackCache(width, height, styles) {
+    const track = state.track;
+    if (!track || !track.samples || track.samples.length < 2) return null;
+
+    const dpr = Math.min(global.devicePixelRatio || 1, 2.5);
+    const cacheKey = buildTrackCacheKey(width, height);
+    const targetW = Math.max(1, Math.floor(width * dpr));
+    const targetH = Math.max(1, Math.floor(height * dpr));
+
+    if (
+      dom.trackCacheKey === cacheKey &&
+      dom.trackCacheCanvas.width === targetW &&
+      dom.trackCacheCanvas.height === targetH
+    ) {
+      return dom.trackCacheCanvas;
+    }
+
+    dom.trackCacheCanvas.width = targetW;
+    dom.trackCacheCanvas.height = targetH;
+    dom.trackCacheKey = cacheKey;
+
+    const octx = dom.trackCacheCanvas.getContext("2d");
+    octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    octx.clearRect(0, 0, width, height);
+
+    // Seřadíme vzorky podle skutečného pořadí malování hráčem (drawOrder = 0 .. N-1)
+    const n = track.samples.length;
+    const ordered = track.samples
+      .map((s, idx) => ({ sample: s, loopIdx: idx, order: typeof s.drawOrder === "number" ? s.drawOrder : idx }))
+      .sort((a, b) => a.order - b.order);
+
     const isTournament = state.profile.selectedTheme === "tournament";
 
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    octx.save();
+    octx.lineCap = "round";
+    octx.lineJoin = "round";
 
-    // 1. Základní souvislá smyčka tratě (statická)
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < n; i++) {
-      ctx.lineTo(pts[i].x, pts[i].y);
-    }
-    ctx.closePath();
+    // Kreslíme trať po krátkých souvislých úsecích od nejdříve namalovaného (spodního)
+    // po nejpozději namalovaný (horní), takže každý pozdější most přirozeně překryje dřívější cestu
+    const step = 6;
+    for (let start = 0; start < n; start += step) {
+      const end = Math.min(n - 1, start + step - 1);
 
-    ctx.strokeStyle = styles.trackBed;
-    ctx.lineWidth = 22;
-    ctx.stroke();
-
-    if (isTournament) {
-      for (let i = 0; i < n; i += 2) {
-        const p0 = pts[i];
-        const p1 = pts[(i + 1) % n];
-        if (p0.dangerRatio > 0.32) {
-          ctx.beginPath();
-          ctx.moveTo(p0.x, p0.y);
-          ctx.lineTo(p1.x, p1.y);
-          ctx.strokeStyle = Math.floor(i / 2) % 2 === 0 ? "#ef4444" : "#ffffff";
-          ctx.lineWidth = 24;
-          ctx.stroke();
+      const traceSegment = () => {
+        octx.beginPath();
+        const first = ordered[start].sample;
+        octx.moveTo(first.x, first.y);
+        for (let k = start + 1; k <= end; k++) {
+          octx.lineTo(ordered[k].sample.x, ordered[k].sample.y);
         }
-      }
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < n; i++) {
-        ctx.lineTo(pts[i].x, pts[i].y);
-      }
-      ctx.closePath();
-      ctx.strokeStyle = "#334155";
-      ctx.lineWidth = 17;
-      ctx.stroke();
-    }
+        // Napojení na další vzorek po smyčce tratě, aby nevznikaly mezery mezi kroky
+        const nextLoopIdx = (ordered[end].loopIdx + 1) % n;
+        octx.lineTo(track.samples[nextLoopIdx].x, track.samples[nextLoopIdx].y);
+      };
 
-    ctx.strokeStyle = styles.trackRail;
-    ctx.lineWidth = 9;
-    ctx.stroke();
+      // Stín a oddělovací lem mostu
+      traceSegment();
+      octx.strokeStyle = "rgba(0, 0, 0, 0.30)";
+      octx.lineWidth = 27.5;
+      octx.stroke();
 
-    if (state.showBrakingZones) {
-      for (let i = 0; i < n; i++) {
-        const p0 = pts[i];
-        const p1 = pts[(i + 1) % n];
-        if (p0.dangerRatio > 0.38) {
-          ctx.beginPath();
-          ctx.moveTo(p0.x, p0.y);
-          ctx.lineTo(p1.x, p1.y);
-          ctx.strokeStyle = p0.dangerRatio > 0.66 ? "#e11d48" : "#d97706";
-          ctx.lineWidth = 5;
-          ctx.stroke();
+      traceSegment();
+      octx.strokeStyle = styles.cardBg;
+      octx.lineWidth = 24.5;
+      octx.stroke();
+
+      // Vozovka
+      traceSegment();
+      octx.strokeStyle = styles.trackBed;
+      octx.lineWidth = 21;
+      octx.stroke();
+
+      // Turnajové obrubníky v zatáčkách
+      if (isTournament) {
+        for (let k = start; k <= end; k++) {
+          const item = ordered[k];
+          const p0 = item.sample;
+          const p1 = track.samples[(item.loopIdx + 1) % n];
+          if (p0.dangerRatio > 0.32) {
+            octx.beginPath();
+            octx.moveTo(p0.x, p0.y);
+            octx.lineTo(p1.x, p1.y);
+            octx.strokeStyle = Math.floor(item.loopIdx / 2) % 2 === 0 ? "#ef4444" : "#ffffff";
+            octx.lineWidth = 23;
+            octx.stroke();
+          }
         }
+        traceSegment();
+        octx.strokeStyle = "#334155";
+        octx.lineWidth = 17;
+        octx.stroke();
       }
-    }
 
-    // 2. Startovní / cílová čára
-    const startPt = pts[0];
-    const startAngle = Math.atan2(startPt.ty, startPt.tx);
-    ctx.save();
-    ctx.translate(startPt.x, startPt.y);
-    ctx.rotate(startAngle);
+      // Středová vodicí kolejnice
+      traceSegment();
+      octx.strokeStyle = styles.trackRail;
+      octx.lineWidth = 9;
+      octx.stroke();
 
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(-4, -12, 8, 24);
-    ctx.fillStyle = "#0f172a";
-    ctx.fillRect(-4, -12, 4, 6);
-    ctx.fillRect(0, -6, 4, 6);
-    ctx.fillRect(-4, 0, 4, 6);
-    ctx.fillRect(0, 6, 4, 6);
-
-    ctx.strokeStyle = styles.startColor;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(-4.5, -12.5, 9, 25);
-    ctx.restore();
-
-    // 3. Horní mosty ve všech kříženích (statické, vždy stejné)
-    const crossings = track.crossings || [];
-    for (const cr of crossings) {
-      drawSingleBridgeOverpass(ctx, track, cr, styles);
-    }
-
-    ctx.restore();
-  }
-
-  function drawSingleBridgeOverpass(ctx, track, cr, styles) {
-    const pts = track.samples;
-    const n = pts.length;
-    const halfSpan = 11;
-
-    ctx.save();
-    ctx.lineCap = "butt";
-    ctx.lineJoin = "round";
-
-    ctx.beginPath();
-    for (let k = -halfSpan; k <= halfSpan; k++) {
-      const idx = (cr.overIndex + k + n) % n;
-      const p = pts[idx];
-      if (k === -halfSpan) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
-    }
-
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.34)";
-    ctx.lineWidth = 28;
-    ctx.stroke();
-
-    ctx.strokeStyle = styles.cardBg;
-    ctx.lineWidth = 25;
-    ctx.stroke();
-
-    ctx.strokeStyle = styles.trackBed;
-    ctx.lineWidth = 21;
-    ctx.stroke();
-
-    ctx.strokeStyle = styles.trackOver;
-    ctx.lineWidth = 9;
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  function getBridgesOverCars(track, cars) {
-    const crossings = (track && track.crossings) || [];
-    if (crossings.length === 0) return [];
-    const n = track.samples.length;
-
-    function circularDiff(a, b) {
-      let diff = Math.abs(a - b);
-      if (diff > n * 0.5) diff = n - diff;
-      return diff;
-    }
-
-    const overSet = new Set();
-    for (const carObj of cars) {
-      if (!carObj || carObj.visible === false || carObj.phase === "flying") continue;
-      const sampleIdx = carObj.sampleIndex || 0;
-      const cosA = Math.cos(carObj.angle || 0);
-      const sinA = Math.sin(carObj.angle || 0);
-      const frontX = carObj.x + cosA * 14;
-      const frontY = carObj.y + sinA * 14;
-      const rearX = carObj.x - cosA * 14;
-      const rearY = carObj.y - sinA * 14;
-
-      for (const cr of crossings) {
-        const distUnder = circularDiff(sampleIdx, cr.underIndex);
-        const distOver = circularDiff(sampleIdx, cr.overIndex);
-        if (distUnder < distOver) {
-          const nearByIndex = distUnder <= 22;
-          const nearByBody =
-            Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 36 ||
-            Math.hypot(frontX - cr.x, frontY - cr.y) <= 28 ||
-            Math.hypot(rearX - cr.x, rearY - cr.y) <= 28;
-          if (nearByIndex || nearByBody) {
-            overSet.add(cr);
+      // Brzdné zóny (Rada)
+      if (state.showBrakingZones) {
+        for (let k = start; k <= end; k++) {
+          const item = ordered[k];
+          const p0 = item.sample;
+          const p1 = track.samples[(item.loopIdx + 1) % n];
+          if (p0.dangerRatio > 0.38) {
+            octx.beginPath();
+            octx.moveTo(p0.x, p0.y);
+            octx.lineTo(p1.x, p1.y);
+            octx.strokeStyle = p0.dangerRatio > 0.66 ? "#e11d48" : "#d97706";
+            octx.lineWidth = 5;
+            octx.stroke();
           }
         }
       }
     }
 
-    return Array.from(overSet).sort((a, b) => a.overOrder - b.overOrder);
+    // Startovní / cílová čára
+    const startPt = track.samples[0];
+    const startAngle = Math.atan2(startPt.ty, startPt.tx);
+    octx.save();
+    octx.translate(startPt.x, startPt.y);
+    octx.rotate(startAngle);
+
+    octx.fillStyle = "#ffffff";
+    octx.fillRect(-4, -12, 8, 24);
+    octx.fillStyle = "#0f172a";
+    octx.fillRect(-4, -12, 4, 6);
+    octx.fillRect(0, -6, 4, 6);
+    octx.fillRect(-4, 0, 4, 6);
+    octx.fillRect(0, 6, 4, 6);
+
+    octx.strokeStyle = styles.startColor;
+    octx.lineWidth = 2;
+    octx.strokeRect(-4.5, -12.5, 9, 25);
+    octx.restore();
+
+    octx.restore();
+    return dom.trackCacheCanvas;
   }
 
+  function stampHigherTrackLayersOverCar(ctx, cacheCanvas, width, height, carObj) {
+    const track = state.track;
+    if (!track || !cacheCanvas || !carObj || carObj.visible === false || carObj.phase === "flying") {
+      return;
+    }
+
+    const pts = track.samples;
+    const n = pts.length;
+    const carIdx = Math.max(0, Math.min(n - 1, carObj.sampleIndex || 0));
+    const carOrder = typeof pts[carIdx].drawOrder === "number" ? pts[carIdx].drawOrder : carIdx;
+
+    // Vybereme pouze ty úseky tratě, které byly namalovány POZDĚJI než pozice auta (drawOrder > carOrder + rezerva),
+    // a jsou blízko vozu, abychom nezatěžovali GPU zbytečnými cestami přes celé plátno
+    const orderMargin = 14;
+    const halfWidth = 12.2;
+    let hasOverlay = false;
+
+    ctx.save();
+    ctx.beginPath();
+
+    for (let i = 0; i < n; i++) {
+      const p0 = pts[i];
+      const order0 = typeof p0.drawOrder === "number" ? p0.drawOrder : i;
+      if (order0 <= carOrder + orderMargin) continue;
+
+      if (Math.hypot(p0.x - carObj.x, p0.y - carObj.y) > 48) continue;
+
+      const p1 = pts[(i + 1) % n];
+      const dx = p1.x - p0.x;
+      const dy = p1.y - p0.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / len) * halfWidth;
+      const ny = (dx / len) * halfWidth;
+
+      ctx.moveTo(p0.x + nx, p0.y + ny);
+      ctx.lineTo(p1.x + nx, p1.y + ny);
+      ctx.lineTo(p1.x - nx, p1.y - ny);
+      ctx.lineTo(p0.x - nx, p0.y - ny);
+      ctx.closePath();
+      hasOverlay = true;
+    }
+
+    if (hasOverlay) {
+      ctx.clip("nonzero");
+      ctx.drawImage(cacheCanvas, 0, 0, width, height);
+    }
+
+    ctx.restore();
+  }
+  
   function roundRectPath(ctx, x, y, w, h, r) {
     const radius = Math.min(r, w * 0.5, h * 0.5);
     ctx.beginPath();
@@ -884,13 +916,15 @@
       return;
     }
 
-    drawStaticTrackAndBridges(dom.ctx, styles);
+    const trackImg = ensureStaticTrackCache(width, height, styles);
+    if (trackImg) {
+      dom.ctx.drawImage(trackImg, 0, 0, width, height);
+    }
 
     if (state.phase === "demo") {
       drawCarEntity(dom.ctx, state.car, styles.carColor, false);
-      const bridgesOver = getBridgesOverCars(state.track, [state.car]);
-      for (const cr of bridgesOver) {
-        drawSingleBridgeOverpass(dom.ctx, state.track, cr, styles);
+      if (trackImg) {
+        stampHigherTrackLayersOverCar(dom.ctx, trackImg, width, height, state.car);
       }
       return;
     }
@@ -898,14 +932,16 @@
     if (state.phase === "racing") {
       updateAndDrawSparks(dom.ctx, dt || 0.016);
       drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
+      if (trackImg) {
+        stampHigherTrackLayersOverCar(dom.ctx, trackImg, width, height, state.ghostCar);
+      }
       drawCarEntity(dom.ctx, state.car, styles.carColor, false);
-      const bridgesOver = getBridgesOverCars(state.track, [state.ghostCar, state.car]);
-      for (const cr of bridgesOver) {
-        drawSingleBridgeOverpass(dom.ctx, state.track, cr, styles);
+      if (trackImg) {
+        stampHigherTrackLayersOverCar(dom.ctx, trackImg, width, height, state.car);
       }
     }
   }
-
+  
   function finalizeTrackFromStroke() {
     const check = Engine.validateStroke(state.rawPoints);
     if (!check.valid) {
