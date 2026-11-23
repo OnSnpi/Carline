@@ -713,7 +713,7 @@
     for (const cr of crossings) {
       const distUnder = circularDiff(sampleIdx, cr.underIndex);
       const distOver = circularDiff(sampleIdx, cr.overIndex);
-      if (distUnder < distOver && (distUnder <= 15 || Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 34)) {
+      if (distUnder < distOver && (distUnder <= 18 || Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 38)) {
         blockingBridges.push(cr);
       }
     }
@@ -726,10 +726,15 @@
     const rect = dom.boardCard.getBoundingClientRect();
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, 0, rect.width, rect.height);
+    // Vnější obdélník plátna kreslený po směru hodinových ručiček (+1 v nonzero pravidle)
+    ctx.moveTo(0, 0);
+    ctx.lineTo(rect.width, 0);
+    ctx.lineTo(rect.width, rect.height);
+    ctx.lineTo(0, rect.height);
+    ctx.closePath();
 
-    const halfSpan = 10;
-    const halfBridgeWidth = 12.5;
+    const halfSpan = 12;
+    const halfBridgeWidth = 13.5;
 
     for (const cr of blockingBridges) {
       for (let k = -halfSpan; k < halfSpan; k++) {
@@ -743,15 +748,39 @@
         const nx = (-dy / len) * halfBridgeWidth;
         const ny = (dx / len) * halfBridgeWidth;
 
-        ctx.moveTo(p0.x + nx, p0.y + ny);
-        ctx.lineTo(p1.x + nx, p1.y + ny);
-        ctx.lineTo(p1.x - nx, p1.y - ny);
-        ctx.lineTo(p0.x - nx, p0.y - ny);
+        // Vnitřní výřez mostu kreslený striktně proti směru hodinových ručiček (-1 v nonzero pravidle),
+        // takže překrývající se dílky mostu v zatáčce nikdy nevytvoří díru zpět
+        const ax = p0.x + nx;
+        const ay = p0.y + ny;
+        const bx = p1.x + nx;
+        const by = p1.y + ny;
+        const cx = p1.x - nx;
+        const cy = p1.y - ny;
+        const dx2 = p0.x - nx;
+        const dy2 = p0.y - ny;
+
+        const signedArea2 =
+          (bx - ax) * (by + ay) +
+          (cx - bx) * (cy + by) +
+          (dx2 - cx) * (dy2 + cy) +
+          (ax - dx2) * (ay + dy2);
+
+        if (signedArea2 < 0) {
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(bx, by);
+          ctx.lineTo(cx, cy);
+          ctx.lineTo(dx2, dy2);
+        } else {
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(dx2, dy2);
+          ctx.lineTo(cx, cy);
+          ctx.lineTo(bx, by);
+        }
         ctx.closePath();
       }
     }
 
-    ctx.clip("evenodd");
+    ctx.clip("nonzero");
     drawCarEntity(ctx, carObj, fillColor, isGhost);
     ctx.restore();
   }
