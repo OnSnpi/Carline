@@ -901,15 +901,6 @@
     }
   }
 
-      drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
-      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
-
-      for (const cr of bridgesAfterCars) {
-        drawBridgeOverpassSegment(dom.ctx, state.track, cr, styles);
-      }
-    }
-  }
-
   function finalizeTrackFromStroke() {
     const check = Engine.validateStroke(state.rawPoints);
     if (!check.valid) {
