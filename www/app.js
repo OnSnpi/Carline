@@ -568,140 +568,76 @@
     ctx.restore();
   }
 
-  function getCarBridgeSpanBonus(carStyleId) {
-    if (carStyleId === "truck") return 4;
-    if (carStyleId === "bus") return 3;
-    if (carStyleId === "prototype") return 2;
-    return 1;
-  }
-
-  function isCarUnderSpecificCrossing(track, carObj, carStyleId, cr) {
-    if (!track || !carObj || carObj.phase !== "driving" || carObj.visible === false || !cr) {
-      return false;
-    }
-    const n = track.samples.length;
-    if (n === 0) return false;
-
-    const sampleIdx = carObj.sampleIndex || 0;
-    const lengthBonus = getCarBridgeSpanBonus(carStyleId);
-    const underSpan = 10 + lengthBonus;
-
-    function circularDiff(a, b) {
-      let diff = Math.abs(a - b);
-      if (diff > n * 0.5) diff = n - diff;
-      return diff;
-    }
-
-    const distUnder = circularDiff(sampleIdx, cr.underIndex);
-    const distOver = circularDiff(sampleIdx, cr.overIndex);
-
-    if (distOver < distUnder) {
-      return false;
-    }
-
-    if (distUnder <= underSpan) {
-      return true;
-    }
-
-    if (
-      typeof carObj.x === "number" &&
-      typeof carObj.y === "number" &&
-      Math.hypot(carObj.x - cr.x, carObj.y - cr.y) <= 21 + lengthBonus * 2
-    ) {
-      return true;
-    }
-
-    return false;
-  }
-
-  function drawBridgeOverpassSegment(ctx, track, cr, styles) {
-    const pts = track.samples;
+  function drawTrackSegmentRibbon(ctx, pts, startIdx, endIdx, styles, isTournament) {
     const n = pts.length;
-    const halfSpan = 10;
+    if (n < 2 || endIdx < startIdx) return;
 
-    ctx.save();
-    ctx.lineCap = "butt";
-    ctx.lineJoin = "round";
+    const clampedStart = Math.max(0, startIdx);
+    const clampedEnd = Math.min(n - 1, endIdx);
+    if (clampedEnd < clampedStart) return;
 
-    ctx.beginPath();
-    for (let k = -halfSpan; k <= halfSpan; k++) {
-      const idx = (cr.overIndex + k + n) % n;
-      const p = pts[idx];
-      if (k === -halfSpan) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
-    }
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.34)";
-    ctx.lineWidth = 28;
-    ctx.stroke();
-
-    ctx.strokeStyle = styles.cardBg;
-    ctx.lineWidth = 25;
-    ctx.stroke();
-
-    ctx.strokeStyle = styles.trackBed;
-    ctx.lineWidth = 21;
-    ctx.stroke();
-
-    ctx.strokeStyle = styles.trackOver;
-    ctx.lineWidth = 9;
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  function drawTrackBase(ctx, styles) {
-    const track = state.track;
-    if (!track || !track.samples || track.samples.length < 2) return;
-    const pts = track.samples;
-    const isTournament = state.profile.selectedTheme === "tournament";
+    const buildSubPath = () => {
+      ctx.beginPath();
+      const first = pts[clampedStart];
+      ctx.moveTo(first.x, first.y);
+      for (let i = clampedStart + 1; i <= clampedEnd + 1; i++) {
+        const p = pts[i % n];
+        ctx.lineTo(p.x, p.y);
+      }
+    };
 
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) {
-      ctx.lineTo(pts[i].x, pts[i].y);
-    }
-    ctx.closePath();
-
-    ctx.strokeStyle = styles.trackBed;
-    ctx.lineWidth = 22;
+    // Jemný vnější stín a oddělovací lem (zajistí čisté oddělení horní vrstvy od spodní v kříženích)
+    buildSubPath();
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.28)";
+    ctx.lineWidth = 27;
     ctx.stroke();
 
+    buildSubPath();
+    ctx.strokeStyle = styles.cardBg;
+    ctx.lineWidth = 24.5;
+    ctx.stroke();
+
+    // Základní těleso tratě
+    buildSubPath();
+    ctx.strokeStyle = styles.trackBed;
+    ctx.lineWidth = 21;
+    ctx.stroke();
+
+    // Turnajové obrubníky v zatáčkách
     if (isTournament) {
-      for (let i = 0; i < pts.length; i += 2) {
+      for (let i = clampedStart; i <= clampedEnd; i++) {
         const p0 = pts[i];
-        const p1 = pts[(i + 1) % pts.length];
+        const p1 = pts[(i + 1) % n];
         if (p0.dangerRatio > 0.32) {
           ctx.beginPath();
           ctx.moveTo(p0.x, p0.y);
           ctx.lineTo(p1.x, p1.y);
           ctx.strokeStyle = Math.floor(i / 2) % 2 === 0 ? "#ef4444" : "#ffffff";
-          ctx.lineWidth = 24;
+          ctx.lineWidth = 22.5;
           ctx.stroke();
         }
       }
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineTo(pts[i].x, pts[i].y);
-      }
-      ctx.closePath();
+      buildSubPath();
       ctx.strokeStyle = "#334155";
       ctx.lineWidth = 17;
       ctx.stroke();
     }
 
+    // Středová kolejnice / vodicí pruh
+    buildSubPath();
     ctx.strokeStyle = styles.trackRail;
     ctx.lineWidth = 9;
     ctx.stroke();
 
+    // Brzdné zóny (Rada)
     if (state.showBrakingZones) {
-      for (let i = 0; i < pts.length; i++) {
+      for (let i = clampedStart; i <= clampedEnd; i++) {
         const p0 = pts[i];
-        const p1 = pts[(i + 1) % pts.length];
+        const p1 = pts[(i + 1) % n];
         if (p0.dangerRatio > 0.38) {
           ctx.beginPath();
           ctx.moveTo(p0.x, p0.y);
@@ -713,8 +649,14 @@
       }
     }
 
-    const startPt = pts[0];
+    ctx.restore();
+  }
+
+  function drawStartFinishLine(ctx, track, styles) {
+    if (!track || !track.samples || track.samples.length === 0) return;
+    const startPt = track.samples[0];
     const startAngle = Math.atan2(startPt.ty, startPt.tx);
+
     ctx.save();
     ctx.translate(startPt.x, startPt.y);
     ctx.rotate(startAngle);
@@ -731,15 +673,75 @@
     ctx.lineWidth = 2;
     ctx.strokeRect(-4.5, -12.5, 9, 25);
     ctx.restore();
-
-    ctx.restore();
   }
 
-  function drawAllBridges(ctx, styles) {
+  function getCarZOrderIndex(track, carObj) {
+    if (!track || !track.samples || track.samples.length === 0 || !carObj) return 0;
+    const n = track.samples.length;
+    const idx = Math.max(0, Math.min(n - 1, carObj.sampleIndex || 0));
+    const sample = track.samples[idx];
+    return typeof sample.drawOrder === "number" ? sample.drawOrder : idx;
+  }
+
+  function renderLayeredTrackAndCars(ctx, styles, entities) {
     const track = state.track;
-    if (!track || !track.crossings) return;
-    for (const cr of track.crossings) {
-      drawBridgeOverpassSegment(ctx, track, cr, styles);
+    if (!track || !track.samples || track.samples.length < 2) return;
+
+    const pts = track.samples;
+    const n = pts.length;
+    const isTournament = state.profile.selectedTheme === "tournament";
+
+    // Z-úroveň každého vzorku (rostoucí od 0 do n-1 od začátku k cíli)
+    const activeEntities = (entities || [])
+      .filter((item) => item && item.car && item.car.visible !== false)
+      .map((item) => ({
+        ...item,
+        zOrder: getCarZOrderIndex(track, item.car)
+      }))
+      .sort((a, b) => a.zOrder - b.zOrder);
+
+    // Kreslíme trať po souvislých úsecích odspodu nahoru a přesně v místě Z-úrovně vozu vykreslíme vůz
+    let cursor = 0;
+    const chunkStep = 14;
+
+    while (cursor < n) {
+      const nextChunkEnd = Math.min(n - 1, cursor + chunkStep - 1);
+
+      // Najdeme vozy, jejichž Z-úroveň spadá do aktuálního úseku [cursor, nextChunkEnd]
+      const entitiesInChunk = activeEntities.filter(
+        (e) => e.zOrder >= cursor && e.zOrder <= nextChunkEnd
+      );
+
+      if (entitiesInChunk.length === 0) {
+        drawTrackSegmentRibbon(ctx, pts, cursor, nextChunkEnd, styles, isTournament);
+        if (cursor === 0) {
+          drawStartFinishLine(ctx, track, styles);
+        }
+      } else {
+        let subCursor = cursor;
+        for (const ent of entitiesInChunk) {
+          if (ent.zOrder >= subCursor) {
+            drawTrackSegmentRibbon(ctx, pts, subCursor, ent.zOrder, styles, isTournament);
+            if (subCursor === 0) {
+              drawStartFinishLine(ctx, track, styles);
+            }
+            subCursor = ent.zOrder + 1;
+          }
+          drawCarEntity(ctx, ent.car, ent.color, ent.isGhost);
+        }
+        if (subCursor <= nextChunkEnd) {
+          drawTrackSegmentRibbon(ctx, pts, subCursor, nextChunkEnd, styles, isTournament);
+        }
+      }
+
+      cursor = nextChunkEnd + 1;
+    }
+
+    // Pokud je některý vůz ve fázi výletu mimo trať (flying), vykreslíme ho vždy úplně navrch
+    for (const ent of activeEntities) {
+      if (ent.car.phase === "flying") {
+        drawCarEntity(ctx, ent.car, ent.color, ent.isGhost);
+      }
     }
   }
 
@@ -883,42 +885,21 @@
       return;
     }
 
-    drawTrackBase(dom.ctx, styles);
-
     if (state.phase === "demo") {
-      const crossings = (state.track && state.track.crossings) || [];
-      const bridgesOverCar = [];
-
-      for (const cr of crossings) {
-        if (isCarUnderSpecificCrossing(state.track, state.car, state.profile.selectedCar, cr)) {
-          bridgesOverCar.push(cr);
-        } else {
-          drawBridgeOverpassSegment(dom.ctx, state.track, cr, styles);
-        }
-      }
-
-      drawCarEntity(dom.ctx, state.car, styles.carColor, false);
-
-      for (const cr of bridgesOverCar) {
-        drawBridgeOverpassSegment(dom.ctx, state.track, cr, styles);
-      }
+      renderLayeredTrackAndCars(dom.ctx, styles, [
+        { car: state.car, color: styles.carColor, isGhost: false }
+      ]);
       return;
     }
 
     if (state.phase === "racing") {
       updateAndDrawSparks(dom.ctx, dt || 0.016);
-      const crossings = (state.track && state.track.crossings) || [];
-      const bridgesAfterCars = [];
-
-      for (const cr of crossings) {
-        const underGhost = isCarUnderSpecificCrossing(state.track, state.ghostCar, "classic_car", cr);
-        const underPlayer = isCarUnderSpecificCrossing(state.track, state.car, state.profile.selectedCar, cr);
-        if (underGhost || underPlayer) {
-          bridgesAfterCars.push(cr);
-        } else {
-          drawBridgeOverpassSegment(dom.ctx, state.track, cr, styles);
-        }
-      }
+      renderLayeredTrackAndCars(dom.ctx, styles, [
+        { car: state.ghostCar, color: styles.ghostColor, isGhost: true },
+        { car: state.car, color: styles.carColor, isGhost: false }
+      ]);
+    }
+  }
 
       drawCarEntity(dom.ctx, state.ghostCar, styles.ghostColor, true);
       drawCarEntity(dom.ctx, state.car, styles.carColor, false);
