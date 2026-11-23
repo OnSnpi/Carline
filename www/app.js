@@ -765,7 +765,7 @@
           (dx2 - cx) * (dy2 + cy) +
           (ax - dx2) * (ay + dy2);
 
-        if (signedArea2 < 0) {
+        if (signedArea2 > 0) {
           ctx.moveTo(ax, ay);
           ctx.lineTo(bx, by);
           ctx.lineTo(cx, cy);
